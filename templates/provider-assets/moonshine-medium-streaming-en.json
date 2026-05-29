@@ -1,0 +1,88 @@
+{
+  "$schema": "https://roca.ai/schemas/provider-assets/0.1.0/schema.json",
+  "schemaVersion": "0.1.0",
+  "providerID": "moonshine",
+  "providerKind": "stt",
+  "displayName": "English Medium Streaming",
+  "modelID": "medium-streaming-en",
+  "revision": "moonshine-voice-0.0.60-medium-streaming-en-quantized",
+  "runtime": {
+    "engine": "moonshine-swift",
+    "modelArch": "mediumStreaming"
+  },
+  "files": [
+    {
+      "id": "moonshine-medium-streaming-en-frontend",
+      "role": "model",
+      "path": "frontend.ort",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/frontend.ort",
+      "sha256": "378fe8a5d7090a1b9ab88bbb1fc95bde010cdd64ec23419350d2d23c675636e9",
+      "byteCount": 47467256,
+      "required": true
+    },
+    {
+      "id": "moonshine-medium-streaming-en-encoder",
+      "role": "model",
+      "path": "encoder.ort",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/encoder.ort",
+      "sha256": "a5f11167a62eef61787fe8410453257d6ddb8eba90af461a9604e5f2e93d5322",
+      "byteCount": 94202872,
+      "required": true
+    },
+    {
+      "id": "moonshine-medium-streaming-en-adapter",
+      "role": "model",
+      "path": "adapter.ort",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/adapter.ort",
+      "sha256": "16307442b7f4229f2f1511fc51b545cec9616e55872c588f3a297bbc6f4762ea",
+      "byteCount": 3647712,
+      "required": true
+    },
+    {
+      "id": "moonshine-medium-streaming-en-decoder-kv",
+      "role": "model",
+      "path": "decoder_kv.ort",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/decoder_kv.ort",
+      "sha256": "fa67aa87521247f5bf44d3e44d4e4978e58c1f114249c3c6909c882624056715",
+      "byteCount": 146216448,
+      "required": true
+    },
+    {
+      "id": "moonshine-medium-streaming-en-decoder-kv-with-attention",
+      "role": "model",
+      "path": "decoder_kv_with_attention.ort",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/decoder_kv_with_attention.ort",
+      "sha256": "40919de95d08690da3a8ff6df14cf55b3220046f3b767b4a4b769e7b32aaf2d2",
+      "byteCount": 146138304,
+      "required": true
+    },
+    {
+      "id": "moonshine-medium-streaming-en-cross-kv",
+      "role": "model",
+      "path": "cross_kv.ort",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/cross_kv.ort",
+      "sha256": "354b9a955caeb768b528f447f0a36ce4b850ca7b4531900165df304d97904fba",
+      "byteCount": 11544952,
+      "required": true
+    },
+    {
+      "id": "moonshine-medium-streaming-en-streaming-config",
+      "role": "resource",
+      "path": "streaming_config.json",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/streaming_config.json",
+      "sha256": "28e83b7a28e91472692a035e0dae3116422ae43aeb2bef5ed822c44ce89b88af",
+      "byteCount": 513,
+      "required": true
+    },
+    {
+      "id": "moonshine-medium-streaming-en-tokenizer",
+      "role": "resource",
+      "path": "tokenizer.bin",
+      "url": "https://download.moonshine.ai/model/medium-streaming-en/quantized/tokenizer.bin",
+      "sha256": "6884b35fd6377d4c4d32336a0bc152f36b64d1e45b6503683cdc238250a8472d",
+      "byteCount": 249974,
+      "required": true
+    }
+  ],
+  "voiceGroups": []
+}

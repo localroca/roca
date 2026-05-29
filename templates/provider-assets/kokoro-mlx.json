@@ -1,0 +1,796 @@
+{
+  "$schema": "https://roca.ai/schemas/provider-assets/0.1.0/schema.json",
+  "schemaVersion": "0.1.0",
+  "providerID": "kokoro",
+  "providerKind": "tts",
+  "displayName": "Kokoro",
+  "modelID": "kokoro-v1.0-mlx",
+  "revision": "98623f832fc74ac3e2eaf2074171af7ac364b183",
+  "files": [
+    {
+      "id": "kokoro-v1_0-model",
+      "role": "model",
+      "path": "Models/kokoro-v1_0.safetensors",
+      "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/kokoro-v1_0.safetensors",
+      "sha256": "e910a0d08651e767910c0ba46cee19f40fc28ce1a774c6f2c4c626fe156c87a6",
+      "byteCount": 324752712,
+      "required": true
+    }
+  ],
+  "voiceGroups": [
+    {
+      "id": "american-english",
+      "displayName": "American English",
+      "locale": "en-US",
+      "defaultInstalled": true,
+      "voices": [
+        {
+          "id": "af_alloy",
+          "displayName": "Alloy",
+          "asset": {
+            "id": "voice-af-alloy",
+            "role": "voice",
+            "path": "Voices/af_alloy.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_alloy.npy",
+            "sha256": "445ae1abcc61bc598e8d5e77cece67d05f905b10c194972acd22a4fbf0e43468",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_aoede",
+          "displayName": "Aoede",
+          "asset": {
+            "id": "voice-af-aoede",
+            "role": "voice",
+            "path": "Voices/af_aoede.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_aoede.npy",
+            "sha256": "3b7fbd4d3370e6c230bbc255465e5160c58a3765db3d0ceeb79f4c1a657c78ed",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_bella",
+          "displayName": "Bella",
+          "asset": {
+            "id": "voice-af-bella",
+            "role": "voice",
+            "path": "Voices/af_bella.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_bella.npy",
+            "sha256": "adf92f9d074ce202966ac1aecd25c5f0eb9e8395d8d3ccb519f77ab321c98952",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_heart",
+          "displayName": "Heart",
+          "asset": {
+            "id": "voice-af-heart",
+            "role": "voice",
+            "path": "Voices/af_heart.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_heart.npy",
+            "sha256": "0212418aafafb1e9878f3300787937aa401ac937cff8c0310ffa32963d96c77b",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_jessica",
+          "displayName": "Jessica",
+          "asset": {
+            "id": "voice-af-jessica",
+            "role": "voice",
+            "path": "Voices/af_jessica.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_jessica.npy",
+            "sha256": "3d32685d7707c120944446f67642d28af08703bfed674ff179e11f04f7e0dae6",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_kore",
+          "displayName": "Kore",
+          "asset": {
+            "id": "voice-af-kore",
+            "role": "voice",
+            "path": "Voices/af_kore.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_kore.npy",
+            "sha256": "d8b0604fa03e79d6121d93c5e02e05021e20386b8656f95b5d205d6fa1af5be8",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_nicole",
+          "displayName": "Nicole",
+          "asset": {
+            "id": "voice-af-nicole",
+            "role": "voice",
+            "path": "Voices/af_nicole.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_nicole.npy",
+            "sha256": "d0c96b799c867a9c03a210f5385353097b0f6ef12f7ab3d777d3227853b129c4",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_nova",
+          "displayName": "Nova",
+          "asset": {
+            "id": "voice-af-nova",
+            "role": "voice",
+            "path": "Voices/af_nova.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_nova.npy",
+            "sha256": "a7ec888221fe372f28324d4926d81cff169682bd458c927a42ea725be234dd21",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_river",
+          "displayName": "River",
+          "asset": {
+            "id": "voice-af-river",
+            "role": "voice",
+            "path": "Voices/af_river.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_river.npy",
+            "sha256": "06479b9964156be429103999a3b6f413eebfd469d167ab087456a1935641fc4c",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_sarah",
+          "displayName": "Sarah",
+          "asset": {
+            "id": "voice-af-sarah",
+            "role": "voice",
+            "path": "Voices/af_sarah.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_sarah.npy",
+            "sha256": "04c3eff66b437ea6a91f9d8ab170660c67057834553b8a2177bc6ec025ce6025",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "af_sky",
+          "displayName": "Sky",
+          "asset": {
+            "id": "voice-af-sky",
+            "role": "voice",
+            "path": "Voices/af_sky.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/af_sky.npy",
+            "sha256": "f0ad8d667e3083ace595b46430a99b2204b33d52175558eb057519ae416f2d18",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_adam",
+          "displayName": "Adam",
+          "asset": {
+            "id": "voice-am-adam",
+            "role": "voice",
+            "path": "Voices/am_adam.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_adam.npy",
+            "sha256": "836a3c058f9397161580bd8c1925fba35c826e8da718da4b82b9fcdeec8ae5a1",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_echo",
+          "displayName": "Echo",
+          "asset": {
+            "id": "voice-am-echo",
+            "role": "voice",
+            "path": "Voices/am_echo.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_echo.npy",
+            "sha256": "29ef1f5a8b486e238d110df57bcc08b43ddbc9a8aa803e30ecb89d03861e9713",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_eric",
+          "displayName": "Eric",
+          "asset": {
+            "id": "voice-am-eric",
+            "role": "voice",
+            "path": "Voices/am_eric.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_eric.npy",
+            "sha256": "6498bf201f0fec7c70ed43faece15040618f2c675cb9a1c780cbcc0acfa4ce07",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_fenrir",
+          "displayName": "Fenrir",
+          "asset": {
+            "id": "voice-am-fenrir",
+            "role": "voice",
+            "path": "Voices/am_fenrir.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_fenrir.npy",
+            "sha256": "6940b7633234b3bba450d2adc08b2431ce6f7b4b51ad60f588ba197907a005b9",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_liam",
+          "displayName": "Liam",
+          "asset": {
+            "id": "voice-am-liam",
+            "role": "voice",
+            "path": "Voices/am_liam.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_liam.npy",
+            "sha256": "29e7499291d45e522ee52cbbb1fa8924f846d7433b2abe2e256c85d920bd8e04",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_michael",
+          "displayName": "Michael",
+          "asset": {
+            "id": "voice-am-michael",
+            "role": "voice",
+            "path": "Voices/am_michael.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_michael.npy",
+            "sha256": "bbb62b3eae08e060f2fcf972d5434144add02bc5f2cc592403f90cab40ae1f4f",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_onyx",
+          "displayName": "Onyx",
+          "asset": {
+            "id": "voice-am-onyx",
+            "role": "voice",
+            "path": "Voices/am_onyx.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_onyx.npy",
+            "sha256": "3f58ca8d3ef6b4b856bf0016b9cef76db459421d91aa0ef7ee436f92569e165e",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_puck",
+          "displayName": "Puck",
+          "asset": {
+            "id": "voice-am-puck",
+            "role": "voice",
+            "path": "Voices/am_puck.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_puck.npy",
+            "sha256": "836a9be38c297f8cae74c32dcfe142c88b5decbce448949db75494cb002a1628",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "am_santa",
+          "displayName": "Santa",
+          "asset": {
+            "id": "voice-am-santa",
+            "role": "voice",
+            "path": "Voices/am_santa.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/am_santa.npy",
+            "sha256": "3368b44c6760799bc767cc8653fbde824fa0dfa829c43f4c0ec8b8bad0569de0",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "british-english",
+      "displayName": "British English",
+      "locale": "en-GB",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "bf_alice",
+          "displayName": "Alice",
+          "asset": {
+            "id": "voice-bf-alice",
+            "role": "voice",
+            "path": "Voices/bf_alice.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bf_alice.npy",
+            "sha256": "be8e6bde8f2ccce00b8da8615a63ab53480abf4cd3ffc023f33f3a05d2c23755",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "bf_emma",
+          "displayName": "Emma",
+          "asset": {
+            "id": "voice-bf-emma",
+            "role": "voice",
+            "path": "Voices/bf_emma.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bf_emma.npy",
+            "sha256": "806fe5ac92bfd3b393d063e935b0af4b5f45e08c638765725bb60f8097f0f910",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "bf_isabella",
+          "displayName": "Isabella",
+          "asset": {
+            "id": "voice-bf-isabella",
+            "role": "voice",
+            "path": "Voices/bf_isabella.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bf_isabella.npy",
+            "sha256": "c8fb97c6bb59c159e6bdb3f10df100b0b14cf34205ef478882f6afa554d51caf",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "bf_lily",
+          "displayName": "Lily",
+          "asset": {
+            "id": "voice-bf-lily",
+            "role": "voice",
+            "path": "Voices/bf_lily.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bf_lily.npy",
+            "sha256": "6a7096cc0c97719e98268e21b09590a114f94730e756d2426b068533faa696e2",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "bm_daniel",
+          "displayName": "Daniel",
+          "asset": {
+            "id": "voice-bm-daniel",
+            "role": "voice",
+            "path": "Voices/bm_daniel.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bm_daniel.npy",
+            "sha256": "e0a4dabcc539c02c68198605fb71fa97a73c574c7813e61cf64e47ec1ba5dd15",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "bm_fable",
+          "displayName": "Fable",
+          "asset": {
+            "id": "voice-bm-fable",
+            "role": "voice",
+            "path": "Voices/bm_fable.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bm_fable.npy",
+            "sha256": "343e09d7c16f71ea05ab2595c68b9027f49246383b311c455a35f56223e61c7a",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "bm_george",
+          "displayName": "George",
+          "asset": {
+            "id": "voice-bm-george",
+            "role": "voice",
+            "path": "Voices/bm_george.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bm_george.npy",
+            "sha256": "7692b2123ac5c99ffdcb5dfe8ea6e8f3bad7f2ae040ae3bddfc443241b5c5c21",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "bm_lewis",
+          "displayName": "Lewis",
+          "asset": {
+            "id": "voice-bm-lewis",
+            "role": "voice",
+            "path": "Voices/bm_lewis.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/bm_lewis.npy",
+            "sha256": "1d8385549ec987e3e353f639393f6fc18d288c1cd644d49b6bc5990ecfeef6f0",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "spanish",
+      "displayName": "Spanish",
+      "locale": "es",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "ef_dora",
+          "displayName": "Dora",
+          "asset": {
+            "id": "voice-ef-dora",
+            "role": "voice",
+            "path": "Voices/ef_dora.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/ef_dora.npy",
+            "sha256": "c27233cfd5544d48308e30ea86bb6ecde4921bcf33d3ad496fc2931b7700334f",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "em_alex",
+          "displayName": "Alex",
+          "asset": {
+            "id": "voice-em-alex",
+            "role": "voice",
+            "path": "Voices/em_alex.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/em_alex.npy",
+            "sha256": "33bb5ce02935cceb8a20be015a659922a9c7b8d98159e840ae08644cb9794d48",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "em_santa",
+          "displayName": "Santa",
+          "asset": {
+            "id": "voice-em-santa",
+            "role": "voice",
+            "path": "Voices/em_santa.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/em_santa.npy",
+            "sha256": "30de2aace4dedbf765b07e95543d15efe4915600c19d24867490181f2c070f4f",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "french",
+      "displayName": "French",
+      "locale": "fr",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "ff_siwis",
+          "displayName": "Siwis",
+          "asset": {
+            "id": "voice-ff-siwis",
+            "role": "voice",
+            "path": "Voices/ff_siwis.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/ff_siwis.npy",
+            "sha256": "6e5f9fa0d44630071e03ecb56d1a779ca88b9d1ed58b71e65360b375be59edf7",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "hindi",
+      "displayName": "Hindi",
+      "locale": "hi",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "hf_alpha",
+          "displayName": "Alpha",
+          "asset": {
+            "id": "voice-hf-alpha",
+            "role": "voice",
+            "path": "Voices/hf_alpha.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/hf_alpha.npy",
+            "sha256": "1d14b6b3089466b3e8a609965d7b65df455f798c88dcf08a7f6e18eb5620a0ac",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "hf_beta",
+          "displayName": "Beta",
+          "asset": {
+            "id": "voice-hf-beta",
+            "role": "voice",
+            "path": "Voices/hf_beta.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/hf_beta.npy",
+            "sha256": "126918c6c7856c2059d9d773717e3196399589509d1dcbbf9fdd02a0ac9e38b8",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "hm_omega",
+          "displayName": "Omega",
+          "asset": {
+            "id": "voice-hm-omega",
+            "role": "voice",
+            "path": "Voices/hm_omega.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/hm_omega.npy",
+            "sha256": "0aeaa428c176f42f18087e5d32be7a3d2fcc51341fa9e52d4e02ee9ac6e6bf2a",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "hm_psi",
+          "displayName": "Psi",
+          "asset": {
+            "id": "voice-hm-psi",
+            "role": "voice",
+            "path": "Voices/hm_psi.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/hm_psi.npy",
+            "sha256": "611695f1abd8a8497d0914a1bafb08fc5774d457bef87ba1c47780b996273dd6",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "italian",
+      "displayName": "Italian",
+      "locale": "it",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "if_sara",
+          "displayName": "Sara",
+          "asset": {
+            "id": "voice-if-sara",
+            "role": "voice",
+            "path": "Voices/if_sara.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/if_sara.npy",
+            "sha256": "4e95b29a13a60a071a542fd58b733aafb1e51b59a22408ace1612fc7f80a2eeb",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "im_nicola",
+          "displayName": "Nicola",
+          "asset": {
+            "id": "voice-im-nicola",
+            "role": "voice",
+            "path": "Voices/im_nicola.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/im_nicola.npy",
+            "sha256": "703545ac7873eabe7b3759dfcec97a645f1d7369f78e75cb243b3d4a42667c87",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "japanese",
+      "displayName": "Japanese",
+      "locale": "ja",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "jf_alpha",
+          "displayName": "Alpha",
+          "asset": {
+            "id": "voice-jf-alpha",
+            "role": "voice",
+            "path": "Voices/jf_alpha.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/jf_alpha.npy",
+            "sha256": "30cba93110ce2341aa96bd88ef5eaf7a13d7b7438237c7b5e7cbc1d110ff1ce2",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "jf_gongitsune",
+          "displayName": "Gongitsune",
+          "asset": {
+            "id": "voice-jf-gongitsune",
+            "role": "voice",
+            "path": "Voices/jf_gongitsune.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/jf_gongitsune.npy",
+            "sha256": "9d7b8504dc2c4c5f2e34fef58bbf4d9e4fe4e78a6bfbfdee570f2eaed6896a09",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "jf_nezumi",
+          "displayName": "Nezumi",
+          "asset": {
+            "id": "voice-jf-nezumi",
+            "role": "voice",
+            "path": "Voices/jf_nezumi.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/jf_nezumi.npy",
+            "sha256": "bc5c366d7a3e15a92a103985cc27e0f10120ff5b5e9a043a27dfddc965c758bd",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "jf_tebukuro",
+          "displayName": "Tebukuro",
+          "asset": {
+            "id": "voice-jf-tebukuro",
+            "role": "voice",
+            "path": "Voices/jf_tebukuro.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/jf_tebukuro.npy",
+            "sha256": "b1d5d953f662b86230e43d98190a1f047611d3f1dc06b07f8c142029f2f816ab",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "jm_kumo",
+          "displayName": "Kumo",
+          "asset": {
+            "id": "voice-jm-kumo",
+            "role": "voice",
+            "path": "Voices/jm_kumo.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/jm_kumo.npy",
+            "sha256": "d55aa155da7bb3409efbc13d13de29e2c61da2271f367eefc2b6613be9bf2f6f",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "portuguese",
+      "displayName": "Portuguese",
+      "locale": "pt",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "pf_dora",
+          "displayName": "Dora",
+          "asset": {
+            "id": "voice-pf-dora",
+            "role": "voice",
+            "path": "Voices/pf_dora.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/pf_dora.npy",
+            "sha256": "57d8305c1ddf61949179e9f124d87eccd9e61f86913d45e24807cd56a34136e4",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "pm_alex",
+          "displayName": "Alex",
+          "asset": {
+            "id": "voice-pm-alex",
+            "role": "voice",
+            "path": "Voices/pm_alex.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/pm_alex.npy",
+            "sha256": "dce15a78711c4b47d6959ea3c6bef9d334fc4a2a084b624ed51d97d45fc0464f",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "pm_santa",
+          "displayName": "Santa",
+          "asset": {
+            "id": "voice-pm-santa",
+            "role": "voice",
+            "path": "Voices/pm_santa.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/pm_santa.npy",
+            "sha256": "036e409b2e99ca9ee391a98bc659b5c0e1a8097adc61ca779fe176dc54580a13",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "mandarin-chinese",
+      "displayName": "Mandarin Chinese",
+      "locale": "zh-CN",
+      "defaultInstalled": false,
+      "voices": [
+        {
+          "id": "zf_xiaobei",
+          "displayName": "Xiaobei",
+          "asset": {
+            "id": "voice-zf-xiaobei",
+            "role": "voice",
+            "path": "Voices/zf_xiaobei.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zf_xiaobei.npy",
+            "sha256": "d4bf7a15446c14379e3b5e03c17885b7ba09cd120e7bc8372117754571963102",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "zf_xiaoni",
+          "displayName": "Xiaoni",
+          "asset": {
+            "id": "voice-zf-xiaoni",
+            "role": "voice",
+            "path": "Voices/zf_xiaoni.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zf_xiaoni.npy",
+            "sha256": "e518b12b20db5a11604d0e307e56206dd1547d09ec15e33e26880c7c0c34fc35",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "zf_xiaoxiao",
+          "displayName": "Xiaoxiao",
+          "asset": {
+            "id": "voice-zf-xiaoxiao",
+            "role": "voice",
+            "path": "Voices/zf_xiaoxiao.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zf_xiaoxiao.npy",
+            "sha256": "43bd4b5e7aabc1a93cb764c3138a84c18d2f4d5d782ce1bb5b49ab6ebbbe76f4",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "zf_xiaoyi",
+          "displayName": "Xiaoyi",
+          "asset": {
+            "id": "voice-zf-xiaoyi",
+            "role": "voice",
+            "path": "Voices/zf_xiaoyi.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zf_xiaoyi.npy",
+            "sha256": "7d02569f38b012fca22ab9af2e99fc7f8a0876a7d729d58a81c1666815143313",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "zm_yunjian",
+          "displayName": "Yunjian",
+          "asset": {
+            "id": "voice-zm-yunjian",
+            "role": "voice",
+            "path": "Voices/zm_yunjian.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zm_yunjian.npy",
+            "sha256": "c1665b210f65799ff48c7f1dbfd33795085a834a1dea0fbaa7a617887d36294e",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "zm_yunxi",
+          "displayName": "Yunxi",
+          "asset": {
+            "id": "voice-zm-yunxi",
+            "role": "voice",
+            "path": "Voices/zm_yunxi.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zm_yunxi.npy",
+            "sha256": "39afb8da3415ce55bc509aee1a356f9d1429669bc68f35d14581d6fc88ffb424",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "zm_yunxia",
+          "displayName": "Yunxia",
+          "asset": {
+            "id": "voice-zm-yunxia",
+            "role": "voice",
+            "path": "Voices/zm_yunxia.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zm_yunxia.npy",
+            "sha256": "f310a2ea4ccaeb9d63c96409432eeff5dfbb1684e95b26b32effaf2a9a5a9d40",
+            "byteCount": 522368,
+            "required": true
+          }
+        },
+        {
+          "id": "zm_yunyang",
+          "displayName": "Yunyang",
+          "asset": {
+            "id": "voice-zm-yunyang",
+            "role": "voice",
+            "path": "Voices/zm_yunyang.npy",
+            "url": "https://huggingface.co/mweinbach/Kokoro-82M-Swift/resolve/98623f832fc74ac3e2eaf2074171af7ac364b183/MLX_GPU/voices/zm_yunyang.npy",
+            "sha256": "53c0fc937095e2c939e61e377049e468caf486f5be397a32805efb49649ac2fc",
+            "byteCount": 522368,
+            "required": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,404 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		082D675939F47D440900CE38 /* RocaServices in Frameworks */ = {isa = PBXBuildFile; productRef = 7D091251A83B2846FA1D3A57 /* RocaServices */; };
+		1A2B3C4D5E6F708192A3B4C5 /* CompanionWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D2E3F40516273849A0B1C2 /* CompanionWindowController.swift */; };
+		1D3C78B5051D7493E0FBCAE8 /* RocaCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8DB3C495C1B27AE4D55A7E58 /* RocaCore */; };
+		20E4EA832009458B3B47AEB6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3181DC2D354606834F9C5AD /* SettingsView.swift */; };
+		24E2A11EF4ED48FEAA7F5941 /* ChatPanelWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B72CB49CB314682B866C969 /* ChatPanelWindowController.swift */; };
+		2700562A3B4109D05177EC1D /* RocaProviders in Frameworks */ = {isa = PBXBuildFile; productRef = 44A57FDDB3C1CC1A30113D28 /* RocaProviders */; };
+		2D4B67B81CFC5A6733328326 /* RocaStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 5D1384C577B90F342A36DF11 /* RocaStorage */; };
+		2F11174BA6F687F9FEC62189 /* RocaAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CFB8D6BD4A2B164B926FEA6 /* RocaAppModel.swift */; };
+		47908C8D3CC2CDC4A425BD3A /* RocaMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D535F42620E29860B8516EE /* RocaMain.swift */; };
+		6013F4D267B6689427240D26 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F34543ADCED247D9F407BBAE /* SettingsWindowController.swift */; };
+		B0A4FF0286E085262968F92E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D2814E9ABF6CB22776ECEEB0 /* Assets.xcassets */; };
+		B22C6C75A819F1079E590F1E /* StatusBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8061F5446CA14482A06EECAA /* StatusBarController.swift */; };
+		BDCA03858B15BC5742C88DBD /* HotkeyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04D33E95B355F07F7D9BD436 /* HotkeyController.swift */; };
+		E0BC3A1CB1B28048161C24F6 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD67630E73CCEE1F5FB8D453 /* AppDelegate.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		04D33E95B355F07F7D9BD436 /* HotkeyController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyController.swift; sourceTree = "<group>"; };
+		24CA8950AE8B6FEABE81C57F /* roca */ = {isa = PBXFileReference; lastKnownFileType = folder; name = roca; path = .; sourceTree = SOURCE_ROOT; };
+		2A823E732A1C9AE2E900181B /* Roca.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Roca.entitlements; sourceTree = "<group>"; };
+		2D535F42620E29860B8516EE /* RocaMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RocaMain.swift; sourceTree = "<group>"; };
+		5CFB8D6BD4A2B164B926FEA6 /* RocaAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RocaAppModel.swift; sourceTree = "<group>"; };
+		74ED59A17A056634C0AB074C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		8061F5446CA14482A06EECAA /* StatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarController.swift; sourceTree = "<group>"; };
+		8B72CB49CB314682B866C969 /* ChatPanelWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPanelWindowController.swift; sourceTree = "<group>"; };
+		AC2B5B4ABBB30DF0B092EA34 /* RocaMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RocaMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1D2E3F40516273849A0B1C2 /* CompanionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionWindowController.swift; sourceTree = "<group>"; };
+		D2814E9ABF6CB22776ECEEB0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DD67630E73CCEE1F5FB8D453 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		E3181DC2D354606834F9C5AD /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F34543ADCED247D9F407BBAE /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A8A05EE0573949901FD45ACD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D3C78B5051D7493E0FBCAE8 /* RocaCore in Frameworks */,
+				2700562A3B4109D05177EC1D /* RocaProviders in Frameworks */,
+				082D675939F47D440900CE38 /* RocaServices in Frameworks */,
+				2D4B67B81CFC5A6733328326 /* RocaStorage in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		3DB5E9837F47ADC666E67B9F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AC2B5B4ABBB30DF0B092EA34 /* RocaMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		52239F44E2911DED32DC645E = {
+			isa = PBXGroup;
+			children = (
+				6A1E7DB456EFE77B940DDA75 /* Packages */,
+				91FBC917E26317C2CF5BBEA7 /* RocaMac */,
+				3DB5E9837F47ADC666E67B9F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6A1E7DB456EFE77B940DDA75 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				24CA8950AE8B6FEABE81C57F /* roca */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		91FBC917E26317C2CF5BBEA7 /* RocaMac */ = {
+			isa = PBXGroup;
+			children = (
+				DD67630E73CCEE1F5FB8D453 /* AppDelegate.swift */,
+				D2814E9ABF6CB22776ECEEB0 /* Assets.xcassets */,
+				8B72CB49CB314682B866C969 /* ChatPanelWindowController.swift */,
+				C1D2E3F40516273849A0B1C2 /* CompanionWindowController.swift */,
+				04D33E95B355F07F7D9BD436 /* HotkeyController.swift */,
+				74ED59A17A056634C0AB074C /* Info.plist */,
+				2A823E732A1C9AE2E900181B /* Roca.entitlements */,
+				5CFB8D6BD4A2B164B926FEA6 /* RocaAppModel.swift */,
+				2D535F42620E29860B8516EE /* RocaMain.swift */,
+				E3181DC2D354606834F9C5AD /* SettingsView.swift */,
+				F34543ADCED247D9F407BBAE /* SettingsWindowController.swift */,
+				8061F5446CA14482A06EECAA /* StatusBarController.swift */,
+			);
+			name = RocaMac;
+			path = Apps/RocaMac;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		D8955A05600E021A80D45C98 /* RocaMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CA6BD75F975D7381F4431613 /* Build configuration list for PBXNativeTarget "RocaMac" */;
+			buildPhases = (
+				3337CB47723350C6CA6111F1 /* Sources */,
+				D207E90D13A599A7BAF895F2 /* Resources */,
+				A8A05EE0573949901FD45ACD /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RocaMac;
+			packageProductDependencies = (
+				8DB3C495C1B27AE4D55A7E58 /* RocaCore */,
+				44A57FDDB3C1CC1A30113D28 /* RocaProviders */,
+				7D091251A83B2846FA1D3A57 /* RocaServices */,
+				5D1384C577B90F342A36DF11 /* RocaStorage */,
+			);
+			productName = RocaMac;
+			productReference = AC2B5B4ABBB30DF0B092EA34 /* RocaMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1B1566913F70B88CD8A5E265 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+			};
+			buildConfigurationList = F837B065210658CD3C41A254 /* Build configuration list for PBXProject "Roca" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 52239F44E2911DED32DC645E;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				69AC68093EC76D689554D207 /* XCLocalSwiftPackageReference "." */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D8955A05600E021A80D45C98 /* RocaMac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D207E90D13A599A7BAF895F2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B0A4FF0286E085262968F92E /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3337CB47723350C6CA6111F1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E0BC3A1CB1B28048161C24F6 /* AppDelegate.swift in Sources */,
+				24E2A11EF4ED48FEAA7F5941 /* ChatPanelWindowController.swift in Sources */,
+				BDCA03858B15BC5742C88DBD /* HotkeyController.swift in Sources */,
+				1A2B3C4D5E6F708192A3B4C5 /* CompanionWindowController.swift in Sources */,
+				2F11174BA6F687F9FEC62189 /* RocaAppModel.swift in Sources */,
+				47908C8D3CC2CDC4A425BD3A /* RocaMain.swift in Sources */,
+				20E4EA832009458B3B47AEB6 /* SettingsView.swift in Sources */,
+				6013F4D267B6689427240D26 /* SettingsWindowController.swift in Sources */,
+				B22C6C75A819F1079E590F1E /* StatusBarController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1082F67D9148DE4EA9538CD1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/RocaMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.roca.mac;
+				PRODUCT_NAME = Roca;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		967BECDEF60A8459D23450FF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/RocaMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.roca.mac;
+				PRODUCT_NAME = Roca;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		A9DEDE59601850BFBE12F90F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		E1902AD8C5C5B13F6C0BC251 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CA6BD75F975D7381F4431613 /* Build configuration list for PBXNativeTarget "RocaMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				967BECDEF60A8459D23450FF /* Debug */,
+				1082F67D9148DE4EA9538CD1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F837B065210658CD3C41A254 /* Build configuration list for PBXProject "Roca" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E1902AD8C5C5B13F6C0BC251 /* Debug */,
+				A9DEDE59601850BFBE12F90F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		69AC68093EC76D689554D207 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		44A57FDDB3C1CC1A30113D28 /* RocaProviders */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RocaProviders;
+		};
+		5D1384C577B90F342A36DF11 /* RocaStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RocaStorage;
+		};
+		7D091251A83B2846FA1D3A57 /* RocaServices */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RocaServices;
+		};
+		8DB3C495C1B27AE4D55A7E58 /* RocaCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RocaCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 1B1566913F70B88CD8A5E265 /* Project object */;
+}

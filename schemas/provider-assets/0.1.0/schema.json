@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roca.ai/schemas/provider-assets/0.1.0/schema.json",
+  "title": "Roca Provider Asset Manifest",
+  "description": "Experimental manifest schema for Roca-managed first-party provider model and voice assets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "providerID",
+    "providerKind",
+    "displayName",
+    "modelID",
+    "revision",
+    "files",
+    "voiceGroups"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "schemaVersion": {
+      "const": "0.1.0"
+    },
+    "providerID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "providerKind": {
+      "enum": ["tts", "stt", "brain"]
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modelID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pinned upstream revision, commit, or Roca asset-set revision."
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/assetFile"
+      }
+    },
+    "voiceGroups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/voiceGroup"
+      }
+    }
+  },
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["engine"] },
+        { "required": ["modelArch"] }
+      ],
+      "properties": {
+        "engine": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelArch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider-specific runtime model architecture, such as Moonshine's tinyStreaming."
+        }
+      }
+    },
+    "assetFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "path", "url", "sha256", "required"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": ["model", "voice", "runtime", "resource"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^(\\/|.*(^|\\/)\\.\\.($|\\/))"
+          }
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "bundlePath": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^(\\/|.*(^|\\/)\\.\\.($|\\/))"
+          },
+          "description": "Optional path to a matching asset bundled inside Roca's app resources."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "voiceGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "locale", "defaultInstalled", "voices"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "defaultInstalled": {
+          "type": "boolean"
+        },
+        "engineSupport": {
+          "enum": ["supported", "planned", "disabled"]
+        },
+        "voices": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/voice"
+          }
+        }
+      }
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "asset"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "asset": {
+          "$ref": "#/$defs/assetFile"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,399 @@
+import Foundation
+import RocaCore
+
+public struct EvalRunConfiguration: Equatable, Sendable {
+    public var suite: EvalSuite
+    public var models: EvalModelSelection
+    public var filter: EvalScenarioFilter
+    public var repeats: Int?
+    public var baseURL: URL
+    public var outputDirectory: URL
+    public var runID: String
+
+    public init(
+        suite: EvalSuite,
+        models: EvalModelSelection,
+        filter: EvalScenarioFilter,
+        repeats: Int?,
+        baseURL: URL,
+        outputDirectory: URL,
+        runID: String = EvalRunConfiguration.defaultRunID()
+    ) {
+        self.suite = suite
+        self.models = models
+        self.filter = filter
+        self.repeats = repeats
+        self.baseURL = baseURL
+        self.outputDirectory = outputDirectory
+        self.runID = runID
+    }
+
+    public static func defaultRunID(date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+            .string(from: date)
+            .replacingOccurrences(of: ":", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "T", with: "-")
+            .replacingOccurrences(of: "Z", with: "Z")
+    }
+}
+
+public struct EvalRunner: Sendable {
+    private let client: any EvalBrainClient
+
+    public init(client: any EvalBrainClient) {
+        self.client = client
+    }
+
+    public func run(_ configuration: EvalRunConfiguration) async throws -> EvalRunOutput {
+        let startedAt = Date()
+        let models = try await resolveModels(configuration.models)
+        guard !models.isEmpty else {
+            throw EvalError.noModels
+        }
+
+        let scenarios = configuration.suite.filtered(configuration.filter)
+        guard !scenarios.isEmpty else {
+            throw EvalError.noScenarios
+        }
+
+        let repeats = configuration.repeats ?? configuration.suite.defaultRepeats
+        guard repeats > 0 else {
+            throw EvalError.invalidArguments("Repeats must be greater than zero.")
+        }
+
+        var records: [EvalTurnRecord] = []
+        for model in models {
+            for scenario in scenarios {
+                for repeatIndex in 0 ..< repeats {
+                    var conversationMessages: [BrainMessage] = []
+                    for (turnIndex, turn) in scenario.turns.enumerated() {
+                        let record = try await runTurn(
+                            suite: configuration.suite,
+                            scenario: scenario,
+                            turn: turn,
+                            turnIndex: turnIndex,
+                            repeatIndex: repeatIndex,
+                            modelID: model,
+                            runID: configuration.runID,
+                            conversationMessages: &conversationMessages
+                        )
+                        records.append(record)
+                    }
+                }
+            }
+        }
+
+        let summaries = models.map { model in
+            makeSummary(modelID: model, records: records.filter { $0.modelID == model })
+        }
+        let run = EvalRunRecord(
+            runID: configuration.runID,
+            suiteID: configuration.suite.id,
+            suiteTitle: configuration.suite.title,
+            startedAt: startedAt,
+            completedAt: Date(),
+            baseURL: configuration.baseURL.absoluteString,
+            models: models,
+            repeats: repeats,
+            scenarioCount: scenarios.count,
+            turnCount: records.count,
+            promptVersions: EvalPromptVersions(),
+            summaries: summaries
+        )
+        return EvalRunOutput(run: run, turns: records, outputDirectory: configuration.outputDirectory)
+    }
+
+    private func resolveModels(_ selection: EvalModelSelection) async throws -> [String] {
+        switch selection {
+        case .all:
+            return try await client.fetchModelNames()
+        case .names(let names):
+            return names
+        }
+    }
+
+    private func runTurn(
+        suite: EvalSuite,
+        scenario: EvalScenario,
+        turn: EvalTurn,
+        turnIndex: Int,
+        repeatIndex: Int,
+        modelID: String,
+        runID: String,
+        conversationMessages: inout [BrainMessage]
+    ) async throws -> EvalTurnRecord {
+        let context = turn.context ?? AssistantLocalContext(
+            activeAppName: "RocaEval",
+            activeAppBundleID: "ai.roca.eval",
+            hasFocusedTextInput: true
+        )
+        let requestID = BrainRequestID(rawValue: "\(runID)-\(modelID)-\(scenario.id)-\(repeatIndex)-\(turnIndex)")
+        let directiveStartedAt = Date()
+        var directiveRawText = ""
+        var directiveParseError: String?
+        var parsedDirective: AssistantDirective?
+        do {
+            directiveRawText = try await client.complete(
+                BrainRequest(
+                    requestID: requestID,
+                    messages: [
+                        BrainMessage(role: .system, content: AssistantPromptCatalog.directiveSystemPrompt),
+                        BrainMessage(
+                            role: .user,
+                            content: AssistantPromptCatalog.directiveUserPrompt(input: turn.user, context: context)
+                        )
+                    ],
+                    role: .companionRouter,
+                    modelID: modelID,
+                    context: RequestContext(
+                        selectedText: nil,
+                        activeAppBundleID: context.activeAppBundleID,
+                        activeAppName: context.activeAppName,
+                        memoryIDs: []
+                    ),
+                    metadata: ["responseFormat": "json"]
+                )
+            )
+            parsedDirective = try AssistantPromptCatalog.parseDirective(directiveRawText)
+        } catch {
+            directiveParseError = error.localizedDescription
+        }
+        let directiveMilliseconds = milliseconds(since: directiveStartedAt)
+
+        let responseStartedAt = Date()
+        var responseRawText: String?
+        var responseError: String?
+        var responseContent: AssistantResponseContent?
+        var responseMilliseconds: Int?
+        let dryRunAction = dryRunAction(for: parsedDirective)
+
+        if parsedDirective == .respond {
+            do {
+                responseRawText = try await client.complete(
+                    BrainRequest(
+                        requestID: requestID,
+                        messages: responseMessages(turn: turn, conversationMessages: conversationMessages),
+                        role: .generalChat,
+                        modelID: modelID,
+                        context: RequestContext(
+                            selectedText: nil,
+                            activeAppBundleID: context.activeAppBundleID,
+                            activeAppName: context.activeAppName,
+                            memoryIDs: []
+                        ),
+                        metadata: ["responseFormat": "json"]
+                    )
+                )
+                responseContent = AssistantPromptCatalog.parseAssistantResponse(responseRawText ?? "")
+                if let responseContent {
+                    remember(userText: turn.user, assistantText: responseContent.conversationText, in: &conversationMessages)
+                }
+            } catch {
+                responseError = error.localizedDescription
+            }
+            responseMilliseconds = milliseconds(since: responseStartedAt)
+        } else if case .unsupported(let message) = parsedDirective {
+            responseContent = AssistantResponseContent(bubbleText: message, detailsMarkdown: nil)
+            responseMilliseconds = nil
+        }
+
+        return EvalTurnRecord(
+            runID: runID,
+            suiteID: suite.id,
+            modelID: modelID,
+            scenarioID: scenario.id,
+            scenarioTitle: scenario.title,
+            scenarioTags: scenario.tags,
+            repeatIndex: repeatIndex,
+            turnIndex: turnIndex,
+            turnID: turn.id,
+            inputMode: turn.inputMode,
+            userText: turn.user,
+            expectedDirectives: turn.expectations?.directives ?? [],
+            expectedAppName: turn.expectations?.appName,
+            expectedBundleID: turn.expectations?.bundleID,
+            expectedInsertedText: turn.expectations?.insertedText,
+            expectsDetailsMarkdown: turn.expectations?.expectsDetailsMarkdown,
+            maxBubbleCharacters: turn.expectations?.maxBubbleCharacters,
+            parsedDirective: parsedDirective?.directiveType,
+            directiveAppName: parsedDirective?.appName,
+            directiveBundleID: parsedDirective?.bundleID,
+            directiveText: parsedDirective?.text,
+            directiveMessage: parsedDirective?.message,
+            directiveRawText: directiveRawText,
+            directiveParseError: directiveParseError,
+            dryRunAction: dryRunAction,
+            responseRawText: responseRawText,
+            responseError: responseError,
+            bubbleText: responseContent?.bubbleText,
+            detailsMarkdown: responseContent?.detailsMarkdown,
+            directiveMilliseconds: directiveMilliseconds,
+            responseMilliseconds: responseMilliseconds,
+            totalMilliseconds: directiveMilliseconds + (responseMilliseconds ?? 0),
+            promptVersions: EvalPromptVersions(),
+            criticalRoutingFailure: criticalRoutingFailure(for: parsedDirective, turn: turn, parseError: directiveParseError),
+            expectationNotes: turn.expectations?.notes,
+            rubric: turn.rubric
+        )
+    }
+
+    private func responseMessages(turn: EvalTurn, conversationMessages: [BrainMessage]) -> [BrainMessage] {
+        var messages = [
+            BrainMessage(role: .system, content: AssistantPromptCatalog.responseSystemPrompt(for: turn.inputMode))
+        ]
+        messages.append(contentsOf: conversationMessages)
+        messages.append(BrainMessage(role: .user, content: turn.user))
+        return messages
+    }
+
+    private func remember(userText: String, assistantText: String, in messages: inout [BrainMessage]) {
+        messages.append(BrainMessage(role: .user, content: userText))
+        messages.append(BrainMessage(role: .assistant, content: assistantText))
+        if messages.count > 10 {
+            messages.removeFirst(messages.count - 10)
+        }
+    }
+
+    private func dryRunAction(for directive: AssistantDirective?) -> EvalDryRunAction {
+        guard let directive else {
+            return .none
+        }
+        switch directive {
+        case .respond:
+            return .none
+        case .openApplication:
+            return .wouldOpen
+        case .quitApplication:
+            return .wouldQuit
+        case .insertText:
+            return .wouldInsert
+        case .readSelection:
+            return .wouldReadSelection
+        case .unsupported:
+            return .wouldRefuseUnsupported
+        }
+    }
+
+    private func criticalRoutingFailure(
+        for directive: AssistantDirective?,
+        turn: EvalTurn,
+        parseError: String?
+    ) -> Bool {
+        if parseError != nil {
+            return true
+        }
+        guard let expectations = turn.expectations,
+              !expectations.directives.isEmpty,
+              let directive
+        else {
+            return false
+        }
+        guard expectations.directives.contains(directive.directiveType) else {
+            return true
+        }
+        if let appName = expectations.appName, !matches(directive.appName, appName) {
+            return true
+        }
+        if let bundleID = expectations.bundleID, !matches(directive.bundleID, bundleID) {
+            return true
+        }
+        if let insertedText = expectations.insertedText, directive.text != insertedText {
+            return true
+        }
+        return false
+    }
+
+    private func matches(_ actual: String?, _ expected: String) -> Bool {
+        guard let actual = actual?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !actual.isEmpty
+        else {
+            return false
+        }
+        let expected = expected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !expected.isEmpty else {
+            return false
+        }
+        return actual.localizedCaseInsensitiveContains(expected)
+            || expected.localizedCaseInsensitiveContains(actual)
+    }
+
+    private func makeSummary(modelID: String, records: [EvalTurnRecord]) -> EvalModelSummary {
+        let latencies = records.map(\.totalMilliseconds).sorted()
+        return EvalModelSummary(
+            modelID: modelID,
+            totalTurns: records.count,
+            parseFailures: records.filter { $0.directiveParseError != nil }.count,
+            responseFailures: records.filter { $0.responseError != nil }.count,
+            criticalRoutingFailures: records.filter(\.criticalRoutingFailure).count,
+            medianLatencyMilliseconds: percentile(0.5, in: latencies),
+            p95LatencyMilliseconds: percentile(0.95, in: latencies)
+        )
+    }
+
+    private func percentile(_ percentile: Double, in values: [Int]) -> Int? {
+        guard !values.isEmpty else {
+            return nil
+        }
+        let clamped = max(0, min(1, percentile))
+        let index = Int((Double(values.count - 1) * clamped).rounded(.up))
+        return values[index]
+    }
+
+    private func milliseconds(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
+    }
+}
+
+private extension AssistantDirective {
+    var directiveType: AssistantDirectiveType {
+        switch self {
+        case .respond:
+            .respond
+        case .openApplication:
+            .openApplication
+        case .quitApplication:
+            .quitApplication
+        case .insertText:
+            .insertText
+        case .readSelection:
+            .readSelection
+        case .unsupported:
+            .unsupported
+        }
+    }
+
+    var appName: String? {
+        switch self {
+        case .openApplication(let target), .quitApplication(let target):
+            target.appName
+        default:
+            nil
+        }
+    }
+
+    var bundleID: String? {
+        switch self {
+        case .openApplication(let target), .quitApplication(let target):
+            target.bundleID
+        default:
+            nil
+        }
+    }
+
+    var text: String? {
+        if case .insertText(let text) = self {
+            return text
+        }
+        return nil
+    }
+
+    var message: String? {
+        if case .unsupported(let message) = self {
+            return message
+        }
+        return nil
+    }
+}
