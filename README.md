@@ -8,4 +8,10 @@ Roca is local-first and model-friendly. Supported speech/listening models are in
 
 Project status: pre-launch. The current development target is Apple Silicon Macs on macOS 15+. See [docs/VISION.md](docs/VISION.md) for the public product direction and [docs/providers/assets.md](docs/providers/assets.md) for first-party managed model assets.
 
+## Roadmap And Contributing
+
+- Public roadmap: [Roca Roadmap](https://github.com/orgs/localroca/projects/3)
+- Contributor guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Mac app setup: [docs/development/mac-app-setup.md](docs/development/mac-app-setup.md)
+
 Roca is licensed under Apache License 2.0. Third-party library and model notices are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

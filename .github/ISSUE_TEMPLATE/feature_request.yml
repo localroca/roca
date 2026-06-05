@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest a user-facing improvement or capability.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should Roca do?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - App
+        - Assistant
+        - Companion
+        - Privacy
+        - Providers
+        - Release
+        - Workflow
+        - Documentation
+        - Community
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: contribution
+    attributes:
+      label: Contribution interest
+      description: Are you interested in helping design, implement, test, or document this?

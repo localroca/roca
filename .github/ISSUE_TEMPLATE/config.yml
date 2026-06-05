@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Roca Roadmap
+    url: https://github.com/orgs/localroca/projects/3
+    about: See the public roadmap for planned work and project direction.
+  - name: Roca Vision
+    url: https://github.com/localroca/roca/blob/main/docs/VISION.md
+    about: Read the public product direction before proposing large changes.

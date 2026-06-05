@@ -987,24 +987,28 @@ private struct PathText: View {
 }
 
 @MainActor
-final class AssistantSetupWindowController {
+final class AssistantSetupWindowController: NSObject, NSWindowDelegate {
     private let model: RocaAppModel
+    private let visibilityDidChange: @MainActor () -> Void
     private var window: NSWindow?
+    private var isSetupOpen = false
 
-    init(model: RocaAppModel) {
+    init(model: RocaAppModel, visibilityDidChange: @escaping @MainActor () -> Void = {}) {
         self.model = model
+        self.visibilityDidChange = visibilityDidChange
+        super.init()
     }
 
     func show() {
         if let window {
+            setOpen(true)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
         let view = AssistantSetupView(model: model) { [weak self] in
-            self?.window?.close()
-            self?.window = nil
+            self?.closeSetup()
         }
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
@@ -1013,9 +1017,38 @@ final class AssistantSetupWindowController {
         window.minSize = NSSize(width: 520, height: 320)
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.center()
+        window.delegate = self
         self.window = window
+        setOpen(true)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    var isOpen: Bool {
+        isSetupOpen
+    }
+
+    func closeSetup() {
+        setOpen(false)
+        window?.close()
+        window = nil
+    }
+
+    func owns(_ candidate: NSWindow?) -> Bool {
+        candidate === window
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        setOpen(false)
+        window = nil
+    }
+
+    private func setOpen(_ open: Bool) {
+        guard isSetupOpen != open else {
+            return
+        }
+        isSetupOpen = open
+        visibilityDidChange()
     }
 }
 

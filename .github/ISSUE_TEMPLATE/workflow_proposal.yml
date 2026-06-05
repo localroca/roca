@@ -1,0 +1,40 @@
+name: Workflow proposal
+description: Propose a bounded workflow Roca could help compress.
+title: "[Workflow]: "
+labels:
+  - enhancement
+  - area:workflow
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow
+      description: What repeated task should Roca help with?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: User-provided context
+      description: What explicit files, selections, apps, or inputs would the user provide?
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Expected output
+      description: What should Roca produce or prepare?
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and consent considerations
+      description: What data is sensitive, and what should stay local?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How would we know this workflow is useful and safe enough?

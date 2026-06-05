@@ -1,0 +1,43 @@
+name: Provider request
+description: Suggest a speech, listening, brain, or model provider integration.
+title: "[Provider]: "
+labels:
+  - enhancement
+  - area:providers
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider name
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Provider kind
+      multiple: true
+      options:
+        - TTS
+        - STT
+        - Brain
+        - Model asset source
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: User value
+      description: What would this provider let Roca users do?
+    validations:
+      required: true
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Runtime, license, or privacy constraints
+      description: Include known local/remote behavior, license notes, hardware needs, or data-sharing concerns.
+  - type: textarea
+    id: links
+    attributes:
+      label: Links
+      description: Official docs, SDKs, model cards, repositories, or examples.

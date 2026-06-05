@@ -5,13 +5,18 @@ import Combine
 final class StatusBarController {
     private let model: RocaAppModel
     private let requestQuit: @MainActor () -> Void
+    private let requestSettings: @MainActor () -> Void
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private lazy var settingsWindowController = SettingsWindowController(model: model)
     private var cancellables: Set<AnyCancellable> = []
 
-    init(model: RocaAppModel, requestQuit: @escaping @MainActor () -> Void = { NSApp.terminate(nil) }) {
+    init(
+        model: RocaAppModel,
+        requestQuit: @escaping @MainActor () -> Void = { NSApp.terminate(nil) },
+        requestSettings: @escaping @MainActor () -> Void
+    ) {
         self.model = model
         self.requestQuit = requestQuit
+        self.requestSettings = requestSettings
     }
 
     func install() {
@@ -222,7 +227,7 @@ final class StatusBarController {
     }
 
     @objc private func openSettings() {
-        settingsWindowController.showSettings()
+        requestSettings()
     }
 
     @objc private func openChat() {

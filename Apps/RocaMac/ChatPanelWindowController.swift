@@ -5,12 +5,12 @@ import SwiftUI
 @MainActor
 final class ChatPanelWindowController: NSWindowController, NSWindowDelegate {
     private let model: RocaAppModel
-    private let setDockIconVisible: @MainActor (Bool) -> Void
+    private let visibilityDidChange: @MainActor () -> Void
     private var isChatOpen = false
 
-    init(model: RocaAppModel, setDockIconVisible: @escaping @MainActor (Bool) -> Void = { _ in }) {
+    init(model: RocaAppModel, visibilityDidChange: @escaping @MainActor () -> Void = {}) {
         self.model = model
-        self.setDockIconVisible = setDockIconVisible
+        self.visibilityDidChange = visibilityDidChange
 
         let contentView = ChatPanelView(model: model)
         let hostingController = NSHostingController(rootView: contentView)
@@ -40,8 +40,7 @@ final class ChatPanelWindowController: NSWindowController, NSWindowDelegate {
         guard let window else {
             return
         }
-        isChatOpen = true
-        setDockIconVisible(true)
+        setOpen(true)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
@@ -51,14 +50,24 @@ final class ChatPanelWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func closeChat() {
-        isChatOpen = false
-        setDockIconVisible(false)
+        setOpen(false)
         window?.close()
     }
 
+    func owns(_ candidate: NSWindow?) -> Bool {
+        candidate === window
+    }
+
     func windowWillClose(_ notification: Notification) {
-        isChatOpen = false
-        setDockIconVisible(false)
+        setOpen(false)
+    }
+
+    private func setOpen(_ open: Bool) {
+        guard isChatOpen != open else {
+            return
+        }
+        isChatOpen = open
+        visibilityDidChange()
     }
 }
 

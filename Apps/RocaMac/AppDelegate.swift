@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController?
     private var appModel: RocaAppModel?
     private var hotkeyController: HotkeyController?
+    private var settingsWindowController: SettingsWindowController?
     private var assistantSetupWindowController: AssistantSetupWindowController?
     private var chatPanelWindowController: ChatPanelWindowController?
     private var companionWindowController: CompanionWindowController?
@@ -21,8 +22,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = RocaAppModel()
         appModel = model
 
+        let settingsWindowController = SettingsWindowController(
+            model: model,
+            visibilityDidChange: { [weak self] in
+                self?.syncActivationPolicy()
+            }
+        )
+        self.settingsWindowController = settingsWindowController
+
         let statusBarController = StatusBarController(model: model) { [weak self] in
             self?.requestFullQuit()
+        } requestSettings: { [weak settingsWindowController] in
+            settingsWindowController?.showSettings()
         }
         self.statusBarController = statusBarController
         statusBarController.install()
@@ -43,8 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let chat = ChatPanelWindowController(
                 model: model,
-                setDockIconVisible: { visible in
-                    self?.setDockIconVisible(visible)
+                visibilityDidChange: {
+                    self?.syncActivationPolicy()
                 }
             )
             self?.chatPanelWindowController = chat
@@ -55,7 +66,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.companionWindowController = companion
             companion.install()
             if model.shouldShowAssistantOnboarding {
-                let setup = AssistantSetupWindowController(model: model)
+                let setup = AssistantSetupWindowController(
+                    model: model,
+                    visibilityDidChange: {
+                        self?.syncActivationPolicy()
+                    }
+                )
                 self?.assistantSetupWindowController = setup
                 setup.show()
             }
@@ -63,8 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if !isFullQuitRequested, chatPanelWindowController?.isOpen == true {
-            chatPanelWindowController?.closeChat()
+        if !isFullQuitRequested, closeKeyOrFrontmostRocaWindow() {
             return .terminateCancel
         }
 
@@ -86,8 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    @objc private func requestChatQuit(_ sender: Any?) {
-        NSApp.terminate(nil)
+    @objc private func closeActiveRocaWindow(_ sender: Any?) {
+        closeKeyOrFrontmostRocaWindow()
     }
 
     @MainActor
@@ -97,11 +112,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func setDockIconVisible(_ visible: Bool) {
-        if visible {
+    @discardableResult
+    private func closeKeyOrFrontmostRocaWindow() -> Bool {
+        if closeWindow(matching: NSApp.keyWindow) {
+            return true
+        }
+
+        if closeWindow(matching: NSApp.mainWindow) {
+            return true
+        }
+
+        for window in NSApp.orderedWindows where closeWindow(matching: window) {
+            return true
+        }
+
+        if chatPanelWindowController?.isOpen == true {
+            chatPanelWindowController?.closeChat()
+            return true
+        }
+
+        if settingsWindowController?.isOpen == true {
+            settingsWindowController?.closeSettings()
+            return true
+        }
+
+        if assistantSetupWindowController?.isOpen == true {
+            assistantSetupWindowController?.closeSetup()
+            return true
+        }
+
+        syncActivationPolicy()
+        return false
+    }
+
+    @MainActor
+    private func closeWindow(matching window: NSWindow?) -> Bool {
+        guard let window else {
+            return false
+        }
+
+        if chatPanelWindowController?.owns(window) == true {
+            chatPanelWindowController?.closeChat()
+            return true
+        }
+
+        if settingsWindowController?.owns(window) == true {
+            settingsWindowController?.closeSettings()
+            return true
+        }
+
+        if assistantSetupWindowController?.owns(window) == true {
+            assistantSetupWindowController?.closeSetup()
+            return true
+        }
+
+        return false
+    }
+
+    @MainActor
+    private func syncActivationPolicy() {
+        let hasUserFacingWindow = chatPanelWindowController?.isOpen == true
+            || settingsWindowController?.isOpen == true
+            || assistantSetupWindowController?.isOpen == true
+
+        if hasUserFacingWindow {
             installMainMenu()
         }
-        NSApp.setActivationPolicy(visible ? .regular : .accessory)
+        NSApp.setActivationPolicy(hasUserFacingWindow ? .regular : .accessory)
     }
 
     @MainActor
@@ -112,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let mainMenu = NSMenu()
         mainMenu.addItem(makeApplicationMenuItem())
+        mainMenu.addItem(makeFileMenuItem())
         mainMenu.addItem(makeEditMenuItem())
         NSApp.mainMenu = mainMenu
     }
@@ -119,15 +197,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeApplicationMenuItem() -> NSMenuItem {
         let appMenuItem = NSMenuItem(title: "Roca", action: nil, keyEquivalent: "")
         let appMenu = NSMenu(title: "Roca")
-        let quitItem = NSMenuItem(
-            title: "Close Chat",
-            action: #selector(requestChatQuit),
+        let closeItem = NSMenuItem(
+            title: "Close Roca Window",
+            action: #selector(closeActiveRocaWindow),
             keyEquivalent: "q"
         )
-        quitItem.target = self
-        appMenu.addItem(quitItem)
+        closeItem.target = self
+        appMenu.addItem(closeItem)
         appMenuItem.submenu = appMenu
         return appMenuItem
+    }
+
+    private func makeFileMenuItem() -> NSMenuItem {
+        let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let closeItem = NSMenuItem(
+            title: "Close Window",
+            action: #selector(closeActiveRocaWindow),
+            keyEquivalent: "w"
+        )
+        closeItem.target = self
+        fileMenu.addItem(closeItem)
+        fileMenuItem.submenu = fileMenu
+        return fileMenuItem
     }
 
     private func makeEditMenuItem() -> NSMenuItem {

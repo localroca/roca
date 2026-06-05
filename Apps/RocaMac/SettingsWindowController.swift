@@ -2,11 +2,14 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let model: RocaAppModel
+    private let visibilityDidChange: @MainActor () -> Void
+    private var isSettingsOpen = false
 
-    init(model: RocaAppModel) {
+    init(model: RocaAppModel, visibilityDidChange: @escaping @MainActor () -> Void = {}) {
         self.model = model
+        self.visibilityDidChange = visibilityDidChange
 
         let contentView = RocaSettingsView(model: model)
         let hostingController = NSHostingController(rootView: contentView)
@@ -19,6 +22,7 @@ final class SettingsWindowController: NSWindowController {
         window.setFrameAutosaveName("RocaSettingsWindow")
 
         super.init(window: window)
+        window.delegate = self
     }
 
     @available(*, unavailable)
@@ -27,9 +31,35 @@ final class SettingsWindowController: NSWindowController {
     }
 
     func showSettings() {
+        setOpen(true)
         model.openSettingsWindowState()
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    var isOpen: Bool {
+        isSettingsOpen
+    }
+
+    func closeSettings() {
+        setOpen(false)
+        window?.close()
+    }
+
+    func owns(_ candidate: NSWindow?) -> Bool {
+        candidate === window
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        setOpen(false)
+    }
+
+    private func setOpen(_ open: Bool) {
+        guard isSettingsOpen != open else {
+            return
+        }
+        isSettingsOpen = open
+        visibilityDidChange()
     }
 }
