@@ -43,6 +43,8 @@ That means:
 
 Roca should not silently profile you or summarize every conversation into permanent memory. Early memory should focus on useful local state: settings, provider choices, voice/avatar preferences, routing rules, current-session context, and facts you explicitly ask Roca to remember.
 
+Current platform, permission, and local-data expectations are tracked in [Privacy And Permissions](privacy-and-permissions.md).
+
 ## Modular By Design
 
 Roca is a product first, but it is built to be modular.

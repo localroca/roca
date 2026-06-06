@@ -13,5 +13,6 @@ Project status: pre-launch. The current development target is Apple Silicon Macs
 - Public roadmap: [Roca Roadmap](https://github.com/orgs/localroca/projects/3)
 - Contributor guide: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Mac app setup: [docs/development/mac-app-setup.md](docs/development/mac-app-setup.md)
+- Privacy and permissions: [docs/privacy-and-permissions.md](docs/privacy-and-permissions.md)
 
 Roca is licensed under Apache License 2.0. Third-party library and model notices are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
