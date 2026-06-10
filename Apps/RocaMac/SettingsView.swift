@@ -431,7 +431,7 @@ private struct AssistantSettingsPane: View {
 
 private struct ProvidersSettingsPane: View {
     @ObservedObject var model: RocaAppModel
-    @State private var isKokoroLanguagePacksExpanded = false
+    @State private var isKokoroVoicePacksExpanded = false
 
     var body: some View {
         SettingsPaneContainer(title: "Providers") {
@@ -461,7 +461,11 @@ private struct ProvidersSettingsPane: View {
                 }
 
                 if model.isKokoroModelInstalled, !model.kokoroVoiceGroups.isEmpty {
-                    DisclosureGroup(isExpanded: $isKokoroLanguagePacksExpanded) {
+                    Text("Kokoro currently processes text as English. Optional voice packs can still change voice and style.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    DisclosureGroup(isExpanded: $isKokoroVoicePacksExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(model.kokoroVoiceGroups) { group in
                                 SettingsRow(label: group.displayName) {
@@ -485,7 +489,7 @@ private struct ProvidersSettingsPane: View {
                             }
                         }
                     } label: {
-                        Text("Language Packs")
+                        Text("Voice Packs")
                             .font(.subheadline.weight(.semibold))
                     }
                 }

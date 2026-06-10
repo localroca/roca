@@ -34,7 +34,7 @@ It includes:
 - optional runtime metadata such as provider-specific model architecture;
 - voice groups for TTS providers.
 
-Voice groups let Roca install a calm default set first and make other language/accent groups available on demand. For Kokoro, the default is model plus all American English voices. Other groups are optional downloads, and development-only support flags can live in the manifest when needed, not in user-facing copy. STT manifests can omit voice groups.
+Voice groups let Roca install a calm default set first and make other voice/style groups available on demand. For Kokoro, the default is model plus all American English voices. Other groups are optional downloads. The current native Kokoro path processes text as English, so non-English voice groups should be presented as voice/style options until multilingual text processing is wired. STT manifests can omit voice groups.
 
 ## Kokoro MLX Direction
 
