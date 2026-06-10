@@ -50,6 +50,7 @@ final class RocaAppModel: ObservableObject {
     @Published private(set) var companionVisible = true
     @Published private(set) var companionWarmth: CompanionWarmth = .warm
     @Published private(set) var assistantSpeechMuted = false
+    @Published private(set) var rawTranscriptLoggingEnabled = false
     @Published private(set) var companionActivity: RocaActivity = .idle
     @Published private(set) var companionMessage = "Ready"
 
@@ -91,6 +92,7 @@ final class RocaAppModel: ObservableObject {
     private var isTerminating = false
     private var voiceLoadGenerations: [ProviderID: Int] = [:]
     private var previewGeneration = 0
+    private var rawTranscriptLoggingGeneration = 0
     private var activePreviewPlaybackGeneration: Int?
     private var ollamaInstalledAppURL: URL?
     private var chatPanelPresenter: (@MainActor () -> Void)?
@@ -227,6 +229,21 @@ final class RocaAppModel: ObservableObject {
                 await speechOrchestrator?.stopSpeaking()
             }
         }
+    }
+
+    func setRawTranscriptLoggingEnabled(_ enabled: Bool) {
+        guard settings.rawTranscriptLoggingEnabled != enabled else {
+            return
+        }
+        rawTranscriptLoggingGeneration += 1
+        if enabled {
+            loggedChatTranscriptMessageIDs.formUnion(chatMessages.map(\.id))
+        } else {
+            pendingChatTranscriptMessageIDs.removeAll()
+        }
+        settings.rawTranscriptLoggingEnabled = enabled
+        updatePublishedSettings()
+        persistSettings()
     }
 
     func setChatPanelPresenter(_ presenter: @escaping @MainActor () -> Void) {
@@ -1421,6 +1438,7 @@ final class RocaAppModel: ObservableObject {
         companionVisible = settings.companionVisible
         companionWarmth = settings.companionWarmth
         assistantSpeechMuted = settings.assistantSpeechMuted
+        rawTranscriptLoggingEnabled = settings.rawTranscriptLoggingEnabled
     }
 
     private func normalizedSpeechProviderMode(_ mode: SpeechProviderMode) -> SpeechProviderMode {
@@ -1811,6 +1829,10 @@ final class RocaAppModel: ObservableObject {
     }
 
     private func logNewChatTranscriptMessages(_ messages: [ChatMessage]) {
+        guard settings.rawTranscriptLoggingEnabled else {
+            return
+        }
+
         let messagesToLog = messages.filter { message in
             guard shouldLogChatTranscriptMessage(message),
                   !loggedChatTranscriptMessageIDs.contains(message.id),
@@ -1827,8 +1849,23 @@ final class RocaAppModel: ObservableObject {
         }
 
         let logStore = chatTranscriptLogStore
+        let loggingGeneration = rawTranscriptLoggingGeneration
         Task { [weak self, logStore] in
             for message in messagesToLog {
+                let shouldAppend = await MainActor.run {
+                    guard let self else {
+                        return false
+                    }
+                    return self.settings.rawTranscriptLoggingEnabled
+                        && self.rawTranscriptLoggingGeneration == loggingGeneration
+                }
+                guard shouldAppend else {
+                    await MainActor.run {
+                        self?.pendingChatTranscriptMessageIDs.remove(message.id)
+                    }
+                    continue
+                }
+
                 do {
                     try await logStore.append(message)
                     await MainActor.run {

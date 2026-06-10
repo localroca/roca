@@ -60,6 +60,7 @@ private struct RocaSettingsDisk: Codable {
     var companionWarmth: CompanionWarmth
     var assistantSpeechMuted: Bool
     var privacyPreference: PrivacyPreference
+    var rawTranscriptLoggingEnabled: Bool
 
     init(_ settings: RocaSettings) {
         self.selectedTTSProvider = settings.selectedTTSProvider?.rawValue
@@ -82,6 +83,7 @@ private struct RocaSettingsDisk: Codable {
         self.companionWarmth = settings.companionWarmth
         self.assistantSpeechMuted = settings.assistantSpeechMuted
         self.privacyPreference = settings.privacyPreference
+        self.rawTranscriptLoggingEnabled = settings.rawTranscriptLoggingEnabled
     }
 
     var domain: RocaSettings {
@@ -108,7 +110,8 @@ private struct RocaSettingsDisk: Codable {
             companionVisible: companionVisible,
             companionWarmth: companionWarmth,
             assistantSpeechMuted: assistantSpeechMuted,
-            privacyPreference: privacyPreference
+            privacyPreference: privacyPreference,
+            rawTranscriptLoggingEnabled: rawTranscriptLoggingEnabled
         )
     }
 
@@ -127,6 +130,7 @@ private struct RocaSettingsDisk: Codable {
         case companionWarmth
         case assistantSpeechMuted
         case privacyPreference
+        case rawTranscriptLoggingEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -155,5 +159,6 @@ private struct RocaSettingsDisk: Codable {
         companionWarmth = try container.decodeIfPresent(CompanionWarmth.self, forKey: .companionWarmth) ?? .warm
         assistantSpeechMuted = try container.decodeIfPresent(Bool.self, forKey: .assistantSpeechMuted) ?? false
         privacyPreference = try container.decodeIfPresent(PrivacyPreference.self, forKey: .privacyPreference) ?? .localOnly
+        rawTranscriptLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .rawTranscriptLoggingEnabled) ?? false
     }
 }

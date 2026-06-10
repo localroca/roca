@@ -646,10 +646,6 @@ private struct LogsSettingsPane: View {
                     PathText(model.assistantMetricsLogPath)
                 }
 
-                SettingsRow(label: "Chat Transcripts") {
-                    PathText(model.chatTranscriptLogPath)
-                }
-
                 HStack {
                     Button {
                         reveal(model.logsDirectoryPath)
@@ -662,6 +658,24 @@ private struct LogsSettingsPane: View {
                     } label: {
                         Label("Reveal Models", systemImage: "folder")
                     }
+                }
+            }
+
+            SettingsSection("Chat Transcripts") {
+                Toggle(
+                    "Save Raw Chat Transcripts",
+                    isOn: Binding(
+                        get: { model.rawTranscriptLoggingEnabled },
+                        set: { model.setRawTranscriptLoggingEnabled($0) }
+                    )
+                )
+
+                Text("Raw transcripts may include prompts, responses, and selected text used in assistant workflows.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                SettingsRow(label: "Path") {
+                    PathText(model.chatTranscriptLogPath)
                 }
             }
 

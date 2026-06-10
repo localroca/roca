@@ -29,9 +29,10 @@ Roca-managed speech/listening models are stored under:
 ~/Library/Application Support/Roca/Models/
 ```
 
-During development, Roca also writes a raw assistant chat transcript log under
-the local logs directory. Public testing needs explicit transcript logging
-controls before that behavior is considered release-ready.
+Raw assistant transcript logging is disabled by default and can be enabled in
+Settings > Logs. When enabled, Roca writes local assistant chat messages to the
+logs directory. Public testing still needs explicit delete and export controls
+before transcript logging is considered release-ready.
 
 ## Provider Boundaries
 

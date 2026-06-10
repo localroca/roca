@@ -20,6 +20,7 @@ public struct RocaSettings: Codable, Sendable, Equatable {
     public var companionWarmth: CompanionWarmth
     public var assistantSpeechMuted: Bool
     public var privacyPreference: PrivacyPreference
+    public var rawTranscriptLoggingEnabled: Bool
 
     public init(
         selectedTTSProvider: ProviderID?,
@@ -35,7 +36,8 @@ public struct RocaSettings: Codable, Sendable, Equatable {
         companionVisible: Bool,
         companionWarmth: CompanionWarmth,
         assistantSpeechMuted: Bool,
-        privacyPreference: PrivacyPreference
+        privacyPreference: PrivacyPreference,
+        rawTranscriptLoggingEnabled: Bool
     ) {
         self.selectedTTSProvider = selectedTTSProvider
         self.providerVoiceSelections = providerVoiceSelections
@@ -51,6 +53,7 @@ public struct RocaSettings: Codable, Sendable, Equatable {
         self.companionWarmth = companionWarmth
         self.assistantSpeechMuted = assistantSpeechMuted
         self.privacyPreference = privacyPreference
+        self.rawTranscriptLoggingEnabled = rawTranscriptLoggingEnabled
     }
 
     public static let phaseOneDefault = RocaSettings(
@@ -67,7 +70,8 @@ public struct RocaSettings: Codable, Sendable, Equatable {
         companionVisible: true,
         companionWarmth: .warm,
         assistantSpeechMuted: false,
-        privacyPreference: .localOnly
+        privacyPreference: .localOnly,
+        rawTranscriptLoggingEnabled: false
     )
 
     public var speechConfiguration: SpeechConfiguration {

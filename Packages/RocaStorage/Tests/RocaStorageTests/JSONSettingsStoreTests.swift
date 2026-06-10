@@ -36,6 +36,7 @@ func settingsStoreRoundTripsSpeechPreferences() async throws {
     settings.companionVisible = false
     settings.companionWarmth = .quiet
     settings.assistantSpeechMuted = true
+    settings.rawTranscriptLoggingEnabled = true
     settings.brainRoles = [
         .companionRouter: BrainProviderSelection(
             providerID: ProviderID(rawValue: "ollama"),
@@ -62,6 +63,24 @@ func settingsStoreRoundTripsSpeechPreferences() async throws {
     #expect(!loaded.companionVisible)
     #expect(loaded.companionWarmth == .quiet)
     #expect(loaded.assistantSpeechMuted)
+    #expect(loaded.rawTranscriptLoggingEnabled)
+
+    try? FileManager.default.removeItem(at: directory)
+}
+
+@Test
+func settingsStoreDefaultsRawTranscriptLoggingToDisabledWhenMissing() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("RocaStorageTests-\(UUID().uuidString)", isDirectory: true)
+    let fileURL = directory.appendingPathComponent("settings.json")
+    let store = JSONSettingsStore(fileURL: fileURL)
+
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: fileURL)
+
+    let loaded = try await store.load()
+
+    #expect(!loaded.rawTranscriptLoggingEnabled)
 
     try? FileManager.default.removeItem(at: directory)
 }
