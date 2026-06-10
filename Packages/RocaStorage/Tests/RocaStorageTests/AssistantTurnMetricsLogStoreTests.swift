@@ -35,6 +35,11 @@ func chatTranscriptLogStoreAppendsAndReadsRecentRows() async throws {
     #expect(recent.first?.message.metadata?.brainProviderID == ProviderID(rawValue: "ollama"))
     #expect(recent.first?.message.metadata?.brainModelID == "mistral:7b")
     #expect(recent.first?.message.metadata?.directiveType == .respond)
+
+    let info = try await store.fileInfo()
+    #expect(info.exists)
+    #expect(info.rowCount == 2)
+    #expect(info.byteCount > 0)
 }
 
 @Test
@@ -52,6 +57,50 @@ func assistantTurnMetricsLogStoreAppendsAndReadsRecentRows() async throws {
     let recent = try await store.recent(limit: 2)
     #expect(recent.map(\.turnID.rawValue) == ["second", "first"])
     #expect(recent.map(\.totalMilliseconds) == [240, 120])
+}
+
+@Test
+func chatTranscriptLogStoreHandlesMissingFiles() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("RocaChatTranscriptLogStoreTests")
+        .appendingPathComponent(UUID().uuidString)
+    let store = ChatTranscriptLogStore(logsDirectory: directory)
+
+    let info = try await store.fileInfo()
+    #expect(!info.exists)
+    #expect(info.rowCount == 0)
+    #expect(info.byteCount == 0)
+
+    try await store.delete()
+    await #expect(throws: RocaError.storageFailed("Chat transcript log does not exist.")) {
+        try await store.export(to: directory.appendingPathComponent("export.jsonl"))
+    }
+}
+
+@Test
+func chatTranscriptLogStoreExportsAndDeletesWithoutTouchingMetrics() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("RocaChatTranscriptLogStoreTests")
+        .appendingPathComponent(UUID().uuidString)
+    let transcriptStore = ChatTranscriptLogStore(logsDirectory: directory)
+    let metricsStore = AssistantTurnMetricsLogStore(logsDirectory: directory)
+    let exportURL = directory
+        .appendingPathComponent("Exports", isDirectory: true)
+        .appendingPathComponent("transcript.jsonl")
+
+    try await transcriptStore.append(chatMessage(id: "first", text: "hello", role: .user))
+    try await metricsStore.append(metrics(id: "metrics", totalMilliseconds: 120))
+    try await transcriptStore.export(to: exportURL)
+
+    let originalData = try Data(contentsOf: transcriptStore.fileURL)
+    let exportedData = try Data(contentsOf: exportURL)
+    #expect(exportedData == originalData)
+
+    try await transcriptStore.delete()
+
+    #expect(!FileManager.default.fileExists(atPath: transcriptStore.fileURL.path))
+    #expect(try await transcriptStore.recent(limit: 10).isEmpty)
+    #expect(try await metricsStore.recent(limit: 10).map(\.turnID.rawValue) == ["metrics"])
 }
 
 private func chatMessage(

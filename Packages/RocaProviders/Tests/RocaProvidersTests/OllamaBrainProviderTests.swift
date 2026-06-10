@@ -34,6 +34,9 @@ func ollamaModelRecommendationUsesAssistantEvalPolicy() {
     #expect(
         OllamaModelRecommendationPolicy.recommendation(for: "qwen2.5-coder:7b").status == .discouraged
     )
+    #expect(
+        OllamaModelRecommendationPolicy.recommendation(for: "gemma4:12b").status == .discouraged
+    )
 }
 
 @Test
@@ -166,6 +169,36 @@ func ollamaProviderUsesNonStreamingChatResponses() async throws {
     #expect(final == "Ready.")
 }
 
+@Test
+func ollamaProviderMapsChatTimeoutsToModelTimeouts() async throws {
+    MockTimeoutChatURLProtocol.setHandler { _ in
+        throw URLError(.timedOut)
+    }
+    defer {
+        MockTimeoutChatURLProtocol.setHandler(nil)
+    }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MockTimeoutChatURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let provider = OllamaBrainProvider(baseURL: URL(string: "http://127.0.0.1:11434")!, session: session)
+
+    let stream = try await provider.complete(
+        BrainRequest(
+            requestID: BrainRequestID(rawValue: "request"),
+            messages: [BrainMessage(role: .user, content: "hello")],
+            role: .companionRouter,
+            modelID: "gemma4:12b",
+            context: RequestContext(selectedText: nil, activeAppBundleID: nil, activeAppName: nil, memoryIDs: []),
+            metadata: ["responseFormat": "json"]
+        )
+    )
+
+    await #expect(throws: RocaError.providerTimedOut(providerID: BuiltInProviderIDs.ollamaBrain, modelID: "gemma4:12b")) {
+        _ = try await finalText(from: stream)
+    }
+}
+
 private func finalText(from events: AsyncThrowingStream<BrainEvent, Error>) async throws -> String {
     var text = ""
     for try await event in events {
@@ -241,6 +274,39 @@ private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
 }
 
 private final class MockChatURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let storage = MockURLProtocolStorage()
+
+    static func setHandler(_ handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?) {
+        storage.set(handler)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.storage.handler() else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class MockTimeoutChatURLProtocol: URLProtocol, @unchecked Sendable {
     private static let storage = MockURLProtocolStorage()
 
     static func setHandler(_ handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?) {

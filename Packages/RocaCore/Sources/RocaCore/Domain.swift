@@ -43,6 +43,7 @@ public enum RocaActivity: Equatable, Sendable {
 public enum RocaError: Error, Equatable, Sendable, LocalizedError {
     case permission(PermissionKind)
     case providerUnavailable(ProviderID)
+    case providerTimedOut(providerID: ProviderID, modelID: String)
     case assetManifestInvalid(String)
     case assetInstallFailed(String)
     case synthesisFailed(String)
@@ -57,6 +58,8 @@ public enum RocaError: Error, Equatable, Sendable, LocalizedError {
             "Missing \(kind.displayName) permission."
         case .providerUnavailable(let id):
             "Provider unavailable: \(id.rawValue)"
+        case .providerTimedOut(let providerID, let modelID):
+            "Provider timed out: \(providerID.rawValue) \(modelID)"
         case .assetManifestInvalid(let message):
             "Asset manifest invalid: \(message)"
         case .assetInstallFailed(let message):

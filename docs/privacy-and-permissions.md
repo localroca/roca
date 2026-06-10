@@ -31,8 +31,7 @@ Roca-managed speech/listening models are stored under:
 
 Raw assistant transcript logging is disabled by default and can be enabled in
 Settings > Logs. When enabled, Roca writes local assistant chat messages to the
-logs directory. Public testing still needs explicit delete and export controls
-before transcript logging is considered release-ready.
+logs directory. Settings > Logs can export or delete the local transcript file.
 
 ## Provider Boundaries
 

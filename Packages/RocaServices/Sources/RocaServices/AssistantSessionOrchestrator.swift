@@ -1,6 +1,23 @@
 import Foundation
 import RocaCore
 
+private enum BrainFailurePhase {
+    case setup
+    case routing
+    case response
+
+    func timeoutMessage(modelID: String) -> String {
+        switch self {
+        case .routing:
+            return "\(modelID) timed out during routing. Try a faster model for Roca assistant routing."
+        case .response:
+            return "\(modelID) timed out while generating a response. Try again or choose a faster model."
+        case .setup:
+            return "\(modelID) timed out while preparing the assistant brain. Try again or choose a faster model."
+        }
+    }
+}
+
 public actor DefaultAssistantSessionOrchestrator {
     public typealias StopSpeechHandler = @Sendable () async -> Void
 
@@ -330,12 +347,13 @@ public actor DefaultAssistantSessionOrchestrator {
                 return
             }
 
-            let message = Self.brainUnavailableRecoveryMessage(for: error) ?? error.localizedDescription
+            let failurePhase = Self.brainFailurePhase(from: timing)
+            let recoveryMessage = Self.brainRecoveryMessage(for: error, phase: failurePhase)
+            let message = recoveryMessage ?? error.localizedDescription
             appendStatus(message, status: .failed, request: request)
             setState(.failed(message))
             await emit(.offline(reason: message), message: message, correlationID: request.turnID.rawValue)
-            if Self.brainUnavailableRecoveryMessage(for: error) != nil,
-               request.outputMode != .textOnly {
+            if recoveryMessage != nil, request.outputMode != .textOnly {
                 try? await speak(message, request: request, timing: &timing, force: true)
             }
             emitMetrics(timing.snapshot(outcome: .failed))
@@ -832,9 +850,22 @@ public actor DefaultAssistantSessionOrchestrator {
         return (finalText ?? accumulated).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private nonisolated static func brainUnavailableRecoveryMessage(for error: Error) -> String? {
+    private nonisolated static func brainFailurePhase(from timing: AssistantTurnTimingBuilder) -> BrainFailurePhase {
+        if timing.responseBrainStartedAt != nil {
+            return .response
+        }
+        if timing.directiveStartedAt != nil {
+            return .routing
+        }
+        return .setup
+    }
+
+    private nonisolated static func brainRecoveryMessage(for error: Error, phase: BrainFailurePhase) -> String? {
         if isCancellation(error) {
             return nil
+        }
+        if case RocaError.providerTimedOut(providerID: _, modelID: let modelID) = error {
+            return phase.timeoutMessage(modelID: modelID)
         }
         if case RocaError.providerUnavailable = error {
             return "I can't reach your assistant brain right now. Start Ollama or choose a different model in Settings."

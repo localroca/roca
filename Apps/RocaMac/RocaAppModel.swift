@@ -51,6 +51,9 @@ final class RocaAppModel: ObservableObject {
     @Published private(set) var companionWarmth: CompanionWarmth = .warm
     @Published private(set) var assistantSpeechMuted = false
     @Published private(set) var rawTranscriptLoggingEnabled = false
+    @Published private(set) var hasChatTranscriptLog = false
+    @Published private(set) var chatTranscriptLogSummary = "No raw transcript log yet"
+    @Published private(set) var chatTranscriptLogActionStatus = ""
     @Published private(set) var companionActivity: RocaActivity = .idle
     @Published private(set) var companionMessage = "Ready"
 
@@ -246,6 +249,68 @@ final class RocaAppModel: ObservableObject {
         persistSettings()
     }
 
+    func refreshChatTranscriptLogInfo() {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                let info = try await chatTranscriptLogStore.fileInfo()
+                await MainActor.run {
+                    self.applyChatTranscriptLogInfo(info)
+                }
+            } catch {
+                await MainActor.run {
+                    self.hasChatTranscriptLog = false
+                    self.chatTranscriptLogSummary = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func exportChatTranscriptLog(to destinationURL: URL) {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await chatTranscriptLogStore.export(to: destinationURL)
+                let info = try await chatTranscriptLogStore.fileInfo()
+                await MainActor.run {
+                    self.chatTranscriptLogActionStatus = "Exported raw transcript log."
+                    self.applyChatTranscriptLogInfo(info)
+                }
+            } catch {
+                await MainActor.run {
+                    self.chatTranscriptLogActionStatus = error.localizedDescription
+                    self.statusText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func deleteChatTranscriptLog() {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await chatTranscriptLogStore.delete()
+                let info = try await chatTranscriptLogStore.fileInfo()
+                await MainActor.run {
+                    self.pendingChatTranscriptMessageIDs.removeAll()
+                    self.chatTranscriptLogActionStatus = "Deleted raw transcript log."
+                    self.applyChatTranscriptLogInfo(info)
+                }
+            } catch {
+                await MainActor.run {
+                    self.chatTranscriptLogActionStatus = error.localizedDescription
+                    self.statusText = error.localizedDescription
+                }
+            }
+        }
+    }
+
     func setChatPanelPresenter(_ presenter: @escaping @MainActor () -> Void) {
         chatPanelPresenter = presenter
     }
@@ -258,6 +323,7 @@ final class RocaAppModel: ObservableObject {
         refreshAccessibilityStatus()
         refreshMicrophoneStatus()
         refreshSpeechRecognitionStatus()
+        refreshChatTranscriptLogInfo()
         Task {
             await refreshKokoroAssetStatus()
             await loadVoices(for: activeSettingsVoiceProviderID)
@@ -882,6 +948,34 @@ final class RocaAppModel: ObservableObject {
 
     var modelsDirectoryPath: String {
         paths.modelsDirectory.path
+    }
+
+    private func applyChatTranscriptLogInfo(_ info: ChatTranscriptLogFileInfo) {
+        hasChatTranscriptLog = info.exists
+        guard info.exists else {
+            chatTranscriptLogSummary = "No raw transcript log yet"
+            return
+        }
+
+        let rowLabel = info.rowCount == 1 ? "1 row" : "\(info.rowCount) rows"
+        let byteText = Self.fileByteFormatter.string(fromByteCount: info.byteCount)
+        if let modifiedAt = info.modifiedAt {
+            let modifiedText = DateFormatter.localizedString(
+                from: modifiedAt,
+                dateStyle: .medium,
+                timeStyle: .short
+            )
+            chatTranscriptLogSummary = "\(rowLabel), \(byteText), updated \(modifiedText)"
+        } else {
+            chatTranscriptLogSummary = "\(rowLabel), \(byteText)"
+        }
+    }
+
+    private static var fileByteFormatter: ByteCountFormatter {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.includesActualByteCount = false
+        return formatter
     }
 
     var hotkeyDescription: String {
@@ -1883,6 +1977,7 @@ final class RocaAppModel: ObservableObject {
     private func markChatTranscriptMessageLogged(_ messageID: ChatMessageID) {
         pendingChatTranscriptMessageIDs.remove(messageID)
         loggedChatTranscriptMessageIDs.insert(messageID)
+        refreshChatTranscriptLogInfo()
     }
 
     private func markChatTranscriptMessageFailed(_ messageID: ChatMessageID, error: Error) {

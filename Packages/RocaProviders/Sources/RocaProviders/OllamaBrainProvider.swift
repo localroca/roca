@@ -95,7 +95,7 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
                     )
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: error)
+                    continuation.finish(throwing: Self.mappedCompletionError(error, providerID: self.id, modelID: modelID))
                 }
             }
             self.setTask(task, for: request.requestID)
@@ -164,6 +164,15 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
         )
         request.httpBody = try encoder.encode(body)
         return request
+    }
+
+    private static func mappedCompletionError(_ error: Error, providerID: ProviderID, modelID: String) -> Error {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain,
+           nsError.code == NSURLErrorTimedOut {
+            return RocaError.providerTimedOut(providerID: providerID, modelID: modelID)
+        }
+        return error
     }
 
     private static func validate(_ response: URLResponse) throws {

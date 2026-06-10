@@ -674,8 +674,41 @@ private struct LogsSettingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                SettingsRow(label: "Status") {
+                    Text(model.chatTranscriptLogSummary)
+                        .foregroundStyle(.secondary)
+                }
+
                 SettingsRow(label: "Path") {
                     PathText(model.chatTranscriptLogPath)
+                }
+
+                HStack {
+                    Button {
+                        exportTranscript()
+                    } label: {
+                        Label("Export Raw Transcript...", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(!model.hasChatTranscriptLog)
+
+                    Button(role: .destructive) {
+                        confirmDeleteTranscript()
+                    } label: {
+                        Label("Delete Transcript Log...", systemImage: "trash")
+                    }
+                    .disabled(!model.hasChatTranscriptLog)
+
+                    Button {
+                        model.refreshChatTranscriptLogInfo()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+
+                if !model.chatTranscriptLogActionStatus.isEmpty {
+                    Text(model.chatTranscriptLogActionStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -696,6 +729,33 @@ private struct LogsSettingsPane: View {
 
     private func reveal(_ path: String) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    private func exportTranscript() {
+        let panel = NSSavePanel()
+        panel.title = "Export Raw Transcript"
+        panel.nameFieldStringValue = "assistant_chat_transcript.jsonl"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        guard panel.runModal() == .OK,
+              let url = panel.url
+        else {
+            return
+        }
+        model.exportChatTranscriptLog(to: url)
+    }
+
+    private func confirmDeleteTranscript() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete Raw Transcript Log?"
+        alert.informativeText = "This deletes the local transcript file only. The current in-memory chat stays open."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+        model.deleteChatTranscriptLog()
     }
 }
 

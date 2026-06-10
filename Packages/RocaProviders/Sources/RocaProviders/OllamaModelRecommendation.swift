@@ -115,6 +115,11 @@ public enum OllamaModelRecommendationPolicy {
             rank: 250,
             reason: "Not recommended for assistant chat; current evals route casual conversation into actions too often."
         ),
+        normalize("gemma4:12b"): BrainModelRecommendation(
+            status: .discouraged,
+            rank: 220,
+            reason: "Timeout-prone through Roca's current assistant routing path; use a faster router model."
+        ),
         normalize("qwen3.5:4b-mlx"): BrainModelRecommendation(
             status: .discouraged,
             rank: 200,

@@ -321,6 +321,31 @@ func assistantSessionSpeaksRecoveryWhenBrainIsUnavailableAfterTranscription() as
 }
 
 @Test
+func assistantSessionNamesModelWhenRoutingTimesOut() async throws {
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: FailingSessionBrainProvider(
+                error: RocaError.providerTimedOut(
+                    providerID: ProviderID(rawValue: "ollama"),
+                    modelID: "gemma4:12b"
+                )
+            )
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText("hello", request: sessionRequest(outputMode: .textOnly))
+
+    let messages = await orchestrator.messageSnapshot
+    let status = try #require(messages.first { $0.role == .status && $0.status == .failed })
+    #expect(status.text == "gemma4:12b timed out during routing. Try a faster model for Roca assistant routing.")
+}
+
+@Test
 func assistantSessionCancelStopsAudioAndCancelsSTT() async throws {
     let stt = RecordingSessionSTTProvider(text: "still listening")
     let audio = FakeSessionAudioInput()

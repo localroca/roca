@@ -112,8 +112,7 @@ repair, and remove state stays consistent.
 - The project is pre-launch and not yet packaged for end users.
 - First-time dependency resolution may spend several minutes fetching the MLX
   submodules and Moonshine framework.
-- Raw assistant transcript logging is opt-in under Settings > Logs. Public
-  testing still needs delete and export controls before transcript logging is
-  considered release-ready.
+- Raw assistant transcript logging is opt-in under Settings > Logs, with local
+  export and delete controls for the transcript file.
 - The current SwiftUI companion is a placeholder state surface. The long-term
   companion direction is planned separately.
