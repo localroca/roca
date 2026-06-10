@@ -79,9 +79,11 @@ The user should be able to see and change these choices. Roca should make provid
 
 Roca should have a recognizable default identity while leaving room for mods and alternatives.
 
-The visual direction is an original cel-shaded desktop companion with a clear silhouette, expressive states, and its own identity.
+The visual direction is an original cel-shaded desktop companion with a clear silhouette, expressive states, and its own identity. The current SwiftUI companion is a placeholder state surface; the longer-term direction is a more expressive animated companion, likely using Live2D once the product shape is ready for it.
 
-The first avatar does not need advanced animation. It does need to communicate useful state:
+The companion should feel warm, calm, expressive, and optional. It should make Roca's state legible at a glance while staying easy to hide, mute, or configure.
+
+The first built-in companion does not need advanced animation. It does need to communicate useful state:
 
 - Idle.
 - Listening.
@@ -90,9 +92,14 @@ The first avatar does not need advanced animation. It does need to communicate u
 - Interrupted.
 - Muted.
 - Offline.
+- Blocked.
 - Waiting for permission.
 
 Presence matters most when it reflects real activity.
+
+The companion should not rely only on motion or facial expression to communicate status. Text, menu-bar state, and other accessible cues should carry the same meaning for users who hide the companion, reduce motion, mute speech, or use assistive technology.
+
+Customization should start with practical controls: visibility, mute state, voice choice, and tone. Over time, Roca should support drop-in replacements for the visual companion so users and contributors can bring their own designs. The first public path can still ship with one polished built-in companion.
 
 ## What Roca Is Not
 
