@@ -13,7 +13,8 @@ This guide covers the current local development path for the Roca Mac app.
 
 The app target is `RocaMac` in `Roca.xcodeproj`. Local command-line builds have
 code signing disabled. User-facing permission and local-data expectations are
-tracked in [Privacy And Permissions](../privacy-and-permissions.md).
+tracked in [Privacy And Permissions](../privacy-and-permissions.md). Public
+distribution checks are tracked in [Mac App Release Checklist](../release/mac-app.md).
 
 ## Clone And Resolve Dependencies
 

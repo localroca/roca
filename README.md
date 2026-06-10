@@ -13,6 +13,19 @@ Project status: pre-launch. The current development target is Apple Silicon Macs
 - Public roadmap: [Roca Roadmap](https://github.com/orgs/localroca/projects/3)
 - Contributor guide: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Mac app setup: [docs/development/mac-app-setup.md](docs/development/mac-app-setup.md)
+- Release checklist: [docs/release/mac-app.md](docs/release/mac-app.md)
 - Privacy and permissions: [docs/privacy-and-permissions.md](docs/privacy-and-permissions.md)
+- Security policy: [SECURITY.md](SECURITY.md)
+
+## Contributors
+
+Thanks to everyone helping make Roca better. This list is generated from
+GitHub contributor data.
+
+<!-- contributors:start -->
+<a href="https://github.com/kalegd" title="@kalegd"><img src="https://avatars.githubusercontent.com/u/8096455?v=4&amp;s=80" width="40" height="40" alt="@kalegd" /></a>
+
+<sub>Updated automatically from GitHub contributor data.</sub>
+<!-- contributors:end -->
 
 Roca is licensed under Apache License 2.0. Third-party library and model notices are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

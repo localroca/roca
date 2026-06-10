@@ -8,7 +8,11 @@ Start here:
 
 - [Mac app setup](docs/development/mac-app-setup.md)
 - [Public roadmap](https://github.com/orgs/localroca/projects/3)
+- [Release checklist](docs/release/mac-app.md)
 - [Triage guide](docs/maintainers/triage.md)
+
+Please follow the [Code Of Conduct](CODE_OF_CONDUCT.md). Report security
+issues through [SECURITY.md](SECURITY.md), not public issues.
 
 ## Contribution Priorities
 
