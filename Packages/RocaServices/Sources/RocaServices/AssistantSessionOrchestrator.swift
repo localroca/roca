@@ -315,7 +315,7 @@ public actor DefaultAssistantSessionOrchestrator {
         await emit(.thinking, message: "Thinking.", correlationID: request.turnID.rawValue)
         do {
             let context = await contextProvider.currentContext()
-            let brainProvider = try await resolver.brainProvider(id: request.brainSelection.providerID)
+            let brainProvider = try await resolver.brainProvider(id: request.selection(for: .companionRouter).providerID)
             activeBrainProvider = brainProvider
             activeBrainRequestID = request.turnID
 
@@ -376,7 +376,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 )
             ],
             role: .companionRouter,
-            modelID: request.brainSelection.modelID,
+            modelID: request.selection(for: .companionRouter).modelID,
             context: RequestContext(
                 selectedText: nil,
                 activeAppBundleID: context.activeAppBundleID,
@@ -401,7 +401,13 @@ public actor DefaultAssistantSessionOrchestrator {
         switch directive {
         case .respond:
             timing.responseBrainStartedAt = Date()
-            let assistantMessageID = appendAssistantMessage("", status: .streaming, request: request, directiveType: directive.metricType)
+            let assistantMessageID = appendAssistantMessage(
+                "",
+                status: .streaming,
+                request: request,
+                directiveType: directive.metricType,
+                brainRole: .generalChat
+            )
             let response = try await completeAssistantResponse(
                 input: input,
                 request: request,
@@ -495,7 +501,7 @@ public actor DefaultAssistantSessionOrchestrator {
             requestID: request.turnID,
             messages: messages,
             role: .generalChat,
-            modelID: request.brainSelection.modelID,
+            modelID: request.selection(for: .generalChat).modelID,
             context: RequestContext(
                 selectedText: nil,
                 activeAppBundleID: context.activeAppBundleID,
@@ -653,7 +659,8 @@ public actor DefaultAssistantSessionOrchestrator {
         _ text: String,
         status: ChatMessageStatus,
         request: AssistantSessionTurnRequest,
-        directiveType: AssistantDirectiveType?
+        directiveType: AssistantDirectiveType?,
+        brainRole: BrainRole = .companionRouter
     ) -> ChatMessageID {
         appendMessage(
             ChatMessage(
@@ -662,7 +669,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 source: .assistant,
                 text: text,
                 status: status,
-                metadata: turnMetadata(for: request, directiveType: directiveType)
+                metadata: turnMetadata(for: request, brainRole: brainRole, directiveType: directiveType)
             )
         )
     }
@@ -707,14 +714,16 @@ public actor DefaultAssistantSessionOrchestrator {
 
     private func turnMetadata(
         for request: AssistantSessionTurnRequest,
+        brainRole: BrainRole = .companionRouter,
         directiveType: AssistantDirectiveType? = nil
     ) -> ChatMessageMetadata {
-        ChatMessageMetadata(
+        let brainSelection = request.selection(for: brainRole)
+        return ChatMessageMetadata(
             inputMode: request.inputMode,
             outputMode: request.outputMode,
-            brainProviderID: request.brainSelection.providerID,
-            brainModelID: request.brainSelection.modelID,
-            brainDisplayName: request.brainSelection.displayName,
+            brainProviderID: brainSelection.providerID,
+            brainModelID: brainSelection.modelID,
+            brainDisplayName: brainSelection.displayName,
             directiveType: directiveType,
             directivePromptVersion: AssistantPromptCatalog.directivePromptVersion,
             responsePromptVersion: AssistantPromptCatalog.responsePromptVersion

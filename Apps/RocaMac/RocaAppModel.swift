@@ -47,6 +47,8 @@ final class RocaAppModel: ObservableObject {
     @Published private(set) var ollamaStatus = "Not checked"
     @Published private(set) var ollamaModels: [OllamaModel] = []
     @Published private(set) var selectedOllamaModelID: String?
+    @Published private(set) var selectedCompanionRouterOllamaModelID: String?
+    @Published private(set) var selectedGeneralChatOllamaModelID: String?
     @Published private(set) var companionVisible = true
     @Published private(set) var companionWarmth: CompanionWarmth = .warm
     @Published private(set) var assistantSpeechMuted = false
@@ -533,6 +535,7 @@ final class RocaAppModel: ObservableObject {
             }
             return
         }
+        let roleSelections = assistantBrainRoleSelections
 
         assistantStatus = "Checking assistant"
         statusText = "Checking assistant..."
@@ -543,7 +546,10 @@ final class RocaAppModel: ObservableObject {
             guard let self else {
                 return
             }
-            if let recoveryMessage = await self.assistantUnavailableMessageIfNeeded(for: brainSelection) {
+            if let recoveryMessage = await self.assistantUnavailableMessageIfNeeded(
+                for: brainSelection,
+                roleSelections: roleSelections
+            ) {
                 await self.assistantSession?.postStatus(recoveryMessage, status: .failed)
                 await self.speakAssistantRecovery(recoveryMessage)
                 await MainActor.run {
@@ -568,6 +574,7 @@ final class RocaAppModel: ObservableObject {
                         outputMode: outputMode,
                         sttProviderID: dictationConfiguration.providerID,
                         brainSelection: brainSelection,
+                        roleSelections: roleSelections,
                         locale: dictationConfiguration.locale,
                         mode: dictationConfiguration.mode,
                         speechConfiguration: speechConfiguration
@@ -602,6 +609,7 @@ final class RocaAppModel: ObservableObject {
             }
             return
         }
+        let roleSelections = assistantBrainRoleSelections
 
         assistantStatus = "Thinking"
         statusText = "Thinking..."
@@ -612,7 +620,10 @@ final class RocaAppModel: ObservableObject {
             guard let self else {
                 return
             }
-            if let recoveryMessage = await self.assistantUnavailableMessageIfNeeded(for: brainSelection) {
+            if let recoveryMessage = await self.assistantUnavailableMessageIfNeeded(
+                for: brainSelection,
+                roleSelections: roleSelections
+            ) {
                 await self.assistantSession?.postStatus(recoveryMessage, status: .failed)
                 await self.speakAssistantRecovery(recoveryMessage)
                 await MainActor.run {
@@ -631,6 +642,7 @@ final class RocaAppModel: ObservableObject {
                     outputMode: outputMode,
                     sttProviderID: dictationConfiguration.providerID,
                     brainSelection: brainSelection,
+                    roleSelections: roleSelections,
                     locale: dictationConfiguration.locale,
                     mode: dictationConfiguration.mode,
                     speechConfiguration: speechConfiguration
@@ -1039,11 +1051,15 @@ final class RocaAppModel: ObservableObject {
     }
 
     var ollamaModelsForPicker: [OllamaModel] {
-        OllamaModelRecommendationPolicy.selectableModels(ollamaModels, role: .companionRouter)
+        ollamaModelsForPicker(for: .companionRouter)
     }
 
-    func ollamaModelPickerSystemImage(for model: OllamaModel) -> String {
-        let recommendation = OllamaModelRecommendationPolicy.recommendation(for: model.id, role: .companionRouter)
+    func ollamaModelsForPicker(for role: BrainRole) -> [OllamaModel] {
+        OllamaModelRecommendationPolicy.selectableModels(ollamaModels, role: role)
+    }
+
+    func ollamaModelPickerSystemImage(for model: OllamaModel, role: BrainRole = .companionRouter) -> String {
+        let recommendation = OllamaModelRecommendationPolicy.recommendation(for: model.id, role: role)
         switch recommendation.status {
         case .preferred:
             return "star.fill"
@@ -1059,28 +1075,54 @@ final class RocaAppModel: ObservableObject {
     }
 
     private var assistantBrainSelection: BrainProviderSelection? {
-        guard let selection = rawAssistantBrainSelection else {
+        assistantBrainSelection(for: .companionRouter)
+    }
+
+    private var assistantBrainRoleSelections: [BrainRole: BrainProviderSelection] {
+        var selections: [BrainRole: BrainProviderSelection] = [:]
+        for role in [BrainRole.companionRouter, .generalChat] {
+            if let selection = assistantBrainSelection(for: role) {
+                selections[role] = selection
+            }
+        }
+        return selections
+    }
+
+    private func assistantBrainSelection(for role: BrainRole) -> BrainProviderSelection? {
+        guard let selection = settings.brainRoles[role] else {
             return nil
         }
-        return isUsableAssistantBrainSelection(selection) ? selection : nil
+        return isUsableAssistantBrainSelection(selection, role: role) ? selection : nil
     }
 
-    private var rawAssistantBrainSelection: BrainProviderSelection? {
-        settings.brainRoles[.companionRouter]
-    }
-
-    private func isUsableAssistantBrainSelection(_ selection: BrainProviderSelection) -> Bool {
+    private func isUsableAssistantBrainSelection(_ selection: BrainProviderSelection, role: BrainRole) -> Bool {
         guard let modelID = selection.modelID, !modelID.isEmpty else {
             return false
         }
         guard selection.providerID == BuiltInProviderIDs.ollamaBrain else {
             return true
         }
-        return OllamaModelRecommendationPolicy.isSelectable(modelID, role: .companionRouter)
+        return OllamaModelRecommendationPolicy.isSelectable(modelID, role: role)
     }
 
-    private func assistantUnavailableMessageIfNeeded(for selection: BrainProviderSelection) async -> String? {
-        guard selection.providerID == BuiltInProviderIDs.ollamaBrain else {
+    private func assistantUnavailableMessageIfNeeded(
+        for selection: BrainProviderSelection,
+        roleSelections: [BrainRole: BrainProviderSelection]
+    ) async -> String? {
+        var selectionsToCheck = Array(roleSelections.values)
+        if selectionsToCheck.isEmpty {
+            selectionsToCheck = [selection]
+        } else if !selectionsToCheck.contains(selection) {
+            selectionsToCheck.append(selection)
+        }
+        let ollamaModelIDs = Set(
+            selectionsToCheck
+                .filter { $0.providerID == BuiltInProviderIDs.ollamaBrain }
+                .compactMap { $0.modelID?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+
+        guard !ollamaModelIDs.isEmpty else {
             return nil
         }
 
@@ -1089,13 +1131,9 @@ final class RocaAppModel: ObservableObject {
 
         switch state {
         case .ready(let models):
-            guard let modelID = selection.modelID?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !modelID.isEmpty
-            else {
-                return "Choose an Ollama model in Assistant settings before talking to me."
-            }
-            guard models.contains(where: { $0.id == modelID }) else {
-                return "Ollama is running, but your selected model isn't available. Choose a model in Assistant settings."
+            let availableModelIDs = Set(models.map(\.id))
+            guard ollamaModelIDs.isSubset(of: availableModelIDs) else {
+                return "Ollama is running, but a selected assistant model isn't available. Choose a model in Assistant settings."
             }
             return nil
         case .runningWithoutModels:
@@ -1143,7 +1181,7 @@ final class RocaAppModel: ObservableObject {
         guard let modelID, !modelID.isEmpty else {
             settings.brainRoles.removeValue(forKey: .companionRouter)
             settings.brainRoles.removeValue(forKey: .generalChat)
-            selectedOllamaModelID = nil
+            updatePublishedAssistantBrainSelection()
             assistantStatus = "Not configured"
             persistSettings()
             return
@@ -1161,8 +1199,40 @@ final class RocaAppModel: ObservableObject {
         )
         settings.brainRoles[.companionRouter] = selection
         settings.brainRoles[.generalChat] = selection
-        selectedOllamaModelID = modelID
+        updatePublishedAssistantBrainSelection()
         assistantStatus = "Ready with \(selection.displayName ?? modelID)"
+        statusText = "Assistant ready"
+        persistSettings()
+    }
+
+    func setAssistantOllamaModel(_ modelID: String?, for role: BrainRole) {
+        guard role == .companionRouter || role == .generalChat else {
+            return
+        }
+        guard let modelID, !modelID.isEmpty else {
+            if role == .companionRouter {
+                setAssistantOllamaModel(nil)
+            } else {
+                settings.brainRoles.removeValue(forKey: role)
+                updatePublishedAssistantBrainSelection()
+                persistSettings()
+            }
+            return
+        }
+        guard OllamaModelRecommendationPolicy.isSelectable(modelID, role: role) else {
+            statusText = "That model is not compatible with Roca assistant chat."
+            return
+        }
+
+        let model = ollamaModels.first { $0.id == modelID }
+        let selection = BrainProviderSelection(
+            providerID: BuiltInProviderIDs.ollamaBrain,
+            modelID: modelID,
+            displayName: model?.displayName ?? modelID
+        )
+        settings.brainRoles[role] = selection
+        updatePublishedAssistantBrainSelection()
+        assistantStatus = "Ready with \(assistantBrainName)"
         statusText = "Assistant ready"
         persistSettings()
     }
@@ -1528,11 +1598,17 @@ final class RocaAppModel: ObservableObject {
         sttProviderMode = normalizedSTTProviderMode(STTProviderMode(providerID: settings.selectedSTTProvider))
         speechSpeed = settings.speechSpeed
         providerVoiceSelections = settings.providerVoiceSelections
-        selectedOllamaModelID = assistantBrainSelection?.modelID
+        updatePublishedAssistantBrainSelection()
         companionVisible = settings.companionVisible
         companionWarmth = settings.companionWarmth
         assistantSpeechMuted = settings.assistantSpeechMuted
         rawTranscriptLoggingEnabled = settings.rawTranscriptLoggingEnabled
+    }
+
+    private func updatePublishedAssistantBrainSelection() {
+        selectedCompanionRouterOllamaModelID = assistantBrainSelection(for: .companionRouter)?.modelID
+        selectedGeneralChatOllamaModelID = assistantBrainSelection(for: .generalChat)?.modelID
+        selectedOllamaModelID = selectedCompanionRouterOllamaModelID
     }
 
     private func normalizedSpeechProviderMode(_ mode: SpeechProviderMode) -> SpeechProviderMode {
@@ -1744,9 +1820,9 @@ final class RocaAppModel: ObservableObject {
             ollamaInstalledAppURL = nil
             ollamaModels = models
             ollamaStatus = models.isEmpty ? "Running with no models" : "\(models.count) models available"
-            selectedOllamaModelID = assistantBrainSelection?.modelID
+            updatePublishedAssistantBrainSelection()
             if hasConfiguredAssistantBrain {
-                assistantStatus = selectedAssistantModelIsAvailable(in: models)
+                assistantStatus = selectedAssistantModelsAreAvailable(in: models)
                     ? "Ready with \(assistantBrainName)"
                     : "Selected model unavailable"
             } else {
@@ -1756,6 +1832,8 @@ final class RocaAppModel: ObservableObject {
             ollamaInstalledAppURL = nil
             ollamaModels = []
             selectedOllamaModelID = nil
+            selectedCompanionRouterOllamaModelID = nil
+            selectedGeneralChatOllamaModelID = nil
             ollamaStatus = "Ollama is running with no models"
             assistantStatus = "No Ollama models"
         case .installedNotRunning(let appURL):
@@ -1771,11 +1849,17 @@ final class RocaAppModel: ObservableObject {
         }
     }
 
-    private func selectedAssistantModelIsAvailable(in models: [OllamaModel]) -> Bool {
-        guard let modelID = assistantBrainSelection?.modelID, !modelID.isEmpty else {
+    private func selectedAssistantModelsAreAvailable(in models: [OllamaModel]) -> Bool {
+        let selectedModelIDs = Set(
+            assistantBrainRoleSelections.values
+                .compactMap { $0.modelID?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        guard !selectedModelIDs.isEmpty else {
             return false
         }
-        return models.contains { $0.id == modelID }
+        let availableModelIDs = Set(models.map(\.id))
+        return selectedModelIDs.isSubset(of: availableModelIDs)
     }
 
     private func moonshineModelStoreRecord(for model: MoonshineManagedModel) -> STTModelRecord {
@@ -1955,7 +2039,10 @@ final class RocaAppModel: ObservableObject {
                 }
                 guard shouldAppend else {
                     await MainActor.run {
-                        self?.pendingChatTranscriptMessageIDs.remove(message.id)
+                        guard let self else {
+                            return
+                        }
+                        _ = self.pendingChatTranscriptMessageIDs.remove(message.id)
                     }
                     continue
                 }

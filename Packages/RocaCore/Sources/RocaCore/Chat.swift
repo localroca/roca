@@ -84,6 +84,7 @@ public struct AssistantSessionTurnRequest: Sendable, Equatable {
     public var outputMode: AssistantOutputMode
     public var sttProviderID: ProviderID?
     public var brainSelection: BrainProviderSelection
+    public var roleSelections: [BrainRole: BrainProviderSelection]
     public var locale: String?
     public var mode: STTMode
     public var speechConfiguration: SpeechConfiguration
@@ -95,6 +96,7 @@ public struct AssistantSessionTurnRequest: Sendable, Equatable {
         outputMode: AssistantOutputMode,
         sttProviderID: ProviderID?,
         brainSelection: BrainProviderSelection,
+        roleSelections: [BrainRole: BrainProviderSelection] = [:],
         locale: String?,
         mode: STTMode,
         speechConfiguration: SpeechConfiguration
@@ -105,9 +107,14 @@ public struct AssistantSessionTurnRequest: Sendable, Equatable {
         self.outputMode = outputMode
         self.sttProviderID = sttProviderID
         self.brainSelection = brainSelection
+        self.roleSelections = roleSelections
         self.locale = locale
         self.mode = mode
         self.speechConfiguration = speechConfiguration
+    }
+
+    public func selection(for role: BrainRole) -> BrainProviderSelection {
+        roleSelections[role] ?? brainSelection
     }
 }
 

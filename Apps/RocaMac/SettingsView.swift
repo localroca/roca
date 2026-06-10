@@ -353,6 +353,7 @@ private struct DictationSettingsPane: View {
 
 private struct AssistantSettingsPane: View {
     @ObservedObject var model: RocaAppModel
+    @State private var isAdvancedModelRoutingExpanded = false
 
     var body: some View {
         SettingsPaneContainer(title: "Assistant") {
@@ -408,6 +409,47 @@ private struct AssistantSettingsPane: View {
                         }
                     }
                     .pickerStyle(.menu)
+
+                    DisclosureGroup("Advanced Model Routing", isExpanded: $isAdvancedModelRoutingExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SettingsRow(label: "Routing") {
+                                Picker(
+                                    "Companion Routing",
+                                    selection: Binding(
+                                        get: { model.selectedCompanionRouterOllamaModelID },
+                                        set: { model.setAssistantOllamaModel($0, for: .companionRouter) }
+                                    )
+                                ) {
+                                    Text("Choose Model").tag(Optional<String>.none)
+                                    ForEach(model.ollamaModelsForPicker(for: .companionRouter)) { item in
+                                        Label(item.displayName, systemImage: model.ollamaModelPickerSystemImage(for: item, role: .companionRouter))
+                                            .tag(Optional(item.id))
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                            }
+
+                            SettingsRow(label: "Chat") {
+                                Picker(
+                                    "General Chat",
+                                    selection: Binding(
+                                        get: { model.selectedGeneralChatOllamaModelID },
+                                        set: { model.setAssistantOllamaModel($0, for: .generalChat) }
+                                    )
+                                ) {
+                                    Text("Same as Model").tag(Optional<String>.none)
+                                    ForEach(model.ollamaModelsForPicker(for: .generalChat)) { item in
+                                        Label(item.displayName, systemImage: model.ollamaModelPickerSystemImage(for: item, role: .generalChat))
+                                            .tag(Optional(item.id))
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
                 }
             }
 

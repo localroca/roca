@@ -96,6 +96,50 @@ func assistantSessionMessagesIncludeBrainMetadata() async throws {
 }
 
 @Test
+func assistantSessionUsesRoleSpecificBrainModels() async throws {
+    let brain = ScriptedSessionBrainProvider(directiveJSON: #"{"type":"respond"}"#, responseText: "Hey.")
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "hello",
+        request: sessionRequest(
+            outputMode: .textOnly,
+            roleSelections: [
+                .companionRouter: BrainProviderSelection(
+                    providerID: ProviderID(rawValue: "test-brain"),
+                    modelID: "router-model",
+                    displayName: "Router Model"
+                ),
+                .generalChat: BrainProviderSelection(
+                    providerID: ProviderID(rawValue: "test-brain"),
+                    modelID: "chat-model",
+                    displayName: "Chat Model"
+                )
+            ]
+        )
+    )
+
+    let requests = await brain.recordedRequests
+    let routerRequest = try #require(requests.first { $0.role == .companionRouter })
+    let chatRequest = try #require(requests.first { $0.role == .generalChat })
+    #expect(routerRequest.modelID == "router-model")
+    #expect(chatRequest.modelID == "chat-model")
+
+    let messages = await orchestrator.messageSnapshot
+    let user = try #require(messages.first { $0.role == .user })
+    let assistant = try #require(messages.first { $0.role == .assistant })
+    #expect(user.metadata?.brainModelID == "router-model")
+    #expect(assistant.metadata?.brainModelID == "chat-model")
+}
+
+@Test
 func assistantSessionTextOnlySuppressesForcedVoiceActionSpeech() async throws {
     let brain = ScriptedSessionBrainProvider(
         directiveJSON: #"{"type":"insertText","text":"hello"}"#,
@@ -391,7 +435,8 @@ private func value<T: Sendable>(from task: Task<T, Never>, timeout: Duration = .
 
 private func sessionRequest(
     inputMode: AssistantInputMode = .typed,
-    outputMode: AssistantOutputMode
+    outputMode: AssistantOutputMode,
+    roleSelections: [BrainRole: BrainProviderSelection] = [:]
 ) -> AssistantSessionTurnRequest {
     AssistantSessionTurnRequest(
         turnID: BrainRequestID(rawValue: UUID().uuidString),
@@ -404,6 +449,7 @@ private func sessionRequest(
             modelID: "test-model",
             displayName: "Test Model"
         ),
+        roleSelections: roleSelections,
         locale: "en-US",
         mode: .toggleToTalk,
         speechConfiguration: SpeechConfiguration(providerID: nil, providerVoiceSelections: [:], speed: 1.0, allowFallback: true)
@@ -442,15 +488,21 @@ private actor ScriptedSessionBrainProvider: BrainProvider {
 
     private let directiveJSON: String
     private let responseText: String
+    private var requests: [BrainRequest] = []
 
     init(directiveJSON: String, responseText: String) {
         self.directiveJSON = directiveJSON
         self.responseText = responseText
     }
 
+    var recordedRequests: [BrainRequest] {
+        requests
+    }
+
     func prepare() async throws {}
 
     func complete(_ request: BrainRequest) async throws -> AsyncThrowingStream<BrainEvent, Error> {
+        requests.append(request)
         let text = request.role == .companionRouter ? directiveJSON : responseText
         return AsyncThrowingStream { continuation in
             continuation.yield(
