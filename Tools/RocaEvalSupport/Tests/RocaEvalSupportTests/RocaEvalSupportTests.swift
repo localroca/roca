@@ -16,12 +16,58 @@ func evalSuiteDecodesAndFiltersScenarios() throws {
     )
 
     #expect(filtered.map(\.id) == ["open_safari"])
+    #expect(suite.scenarios.first { $0.id == "casual_check_in" }?.role == .generalChat)
+    #expect(suite.scenarios.first { $0.id == "open_safari" }?.role == .companionRouter)
 }
 
 @Test
 func evalModelSelectionParsesAllAndExplicitLists() {
     #expect(EvalModelSelection.parse("all") == .all)
     #expect(EvalModelSelection.parse("qwen3:4b,mistral:7b") == .names(["qwen3:4b", "mistral:7b"]))
+}
+
+@Test
+func ollamaEvalBrainClientUsesGenerousRequestTimeout() async throws {
+    MockEvalChatURLProtocol.setHandler { request in
+        #expect(request.timeoutInterval == OllamaEvalBrainClient.defaultRequestTimeoutSeconds)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        let data = """
+        {
+          "message": {"role": "assistant", "content": "{\\"type\\":\\"respond\\"}"},
+          "done": true
+        }
+        """.data(using: .utf8)!
+        return (response, data)
+    }
+    defer {
+        MockEvalChatURLProtocol.setHandler(nil)
+    }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MockEvalChatURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let client = OllamaEvalBrainClient(
+        baseURL: URL(string: "http://127.0.0.1:11434")!,
+        session: session
+    )
+
+    let response = try await client.complete(
+        BrainRequest(
+            requestID: BrainRequestID(rawValue: "eval-request"),
+            messages: [BrainMessage(role: .user, content: "hello")],
+            role: .companionRouter,
+            modelID: "slow-model",
+            context: RequestContext(selectedText: nil, activeAppBundleID: nil, activeAppName: nil, memoryIDs: []),
+            metadata: ["responseFormat": "json"]
+        )
+    )
+
+    #expect(response == #"{"type":"respond"}"#)
 }
 
 @Test
@@ -51,6 +97,9 @@ func evalRunnerUsesSharedPromptsAndDryRunsActions() async throws {
     #expect(record.dryRunAction == .wouldOpen)
     #expect(record.directiveAppName == "Safari")
     #expect(record.responseRawText == nil)
+    #expect(record.modelID == "test-model")
+    #expect(record.routerModelID == "test-model")
+    #expect(record.chatModelID == "test-model")
     #expect(record.promptVersions.directive == AssistantPromptCatalog.directivePromptVersion)
     #expect(await client.requestRoles == [.companionRouter])
 }
@@ -89,7 +138,6 @@ func evalRunnerRecordsRespondBubbleAndDetails() async throws {
     let client = ScriptedEvalBrainClient(
         models: ["test-model"],
         responses: [
-            #"{"type":"respond"}"#,
             "{\"bubbleText\":\"Short.\",\"detailsMarkdown\":\"## Details\\n- One\"}"
         ]
     )
@@ -107,10 +155,60 @@ func evalRunnerRecordsRespondBubbleAndDetails() async throws {
     )
 
     let record = try #require(output.turns.first)
-    #expect(record.parsedDirective == .respond)
+    #expect(record.parsedDirective == nil)
     #expect(record.bubbleText == "Short.")
     #expect(record.detailsMarkdown == "## Details\n- One")
-    #expect(await client.requestRoles == [.companionRouter, .generalChat])
+    #expect(record.evalRole == .generalChat)
+    #expect(record.directiveRawText.isEmpty)
+    #expect(record.directiveMilliseconds == 0)
+    #expect(await client.requestRoles == [.generalChat])
+}
+
+@Test
+func evalRunnerRunsEachModelAcrossRoleSpecificScenarios() async throws {
+    let suite = try JSONDecoder().decode(EvalSuite.self, from: suiteFixtureData())
+    let client = ScriptedEvalBrainClient(
+        models: ["unused"],
+        responses: [
+            #"{"bubbleText":"m1 chat."}"#,
+            #"{"type":"openApplication","appName":"Safari"}"#,
+            #"{"bubbleText":"m2 chat."}"#,
+            #"{"type":"openApplication","appName":"Safari"}"#
+        ]
+    )
+    let runner = EvalRunner(client: client)
+    let output = try await runner.run(
+        EvalRunConfiguration(
+            suite: suite,
+            models: .names(["m1", "m2"]),
+            filter: EvalScenarioFilter(scenarioIDs: ["casual_check_in", "open_safari"]),
+            repeats: 1,
+            baseURL: URL(string: "http://127.0.0.1:11434")!,
+            outputDirectory: URL(fileURLWithPath: "/tmp/roca-eval-test"),
+            runID: "test-run"
+        )
+    )
+
+    #expect(output.turns.map(\.modelID) == ["m1", "m1", "m2", "m2"])
+    #expect(output.turns.map(\.evalRole) == [.generalChat, .companionRouter, .generalChat, .companionRouter])
+    #expect(output.run.models == ["m1", "m2"])
+    #expect(output.run.summaries.map(\.modelID) == ["m1", "m2"])
+    #expect(output.run.roleSummaries.map { "\($0.role.rawValue):\($0.modelID)" } == [
+        "companionRouter:m1",
+        "companionRouter:m2",
+        "generalChat:m1",
+        "generalChat:m2"
+    ])
+    #expect(output.run.recommendationEvidence.map { "\($0.role?.rawValue ?? "general"):\($0.modelID)" } == [
+        "general:m1",
+        "general:m2",
+        "companionRouter:m1",
+        "companionRouter:m2",
+        "generalChat:m1",
+        "generalChat:m2"
+    ])
+    #expect(await client.requestRoles == [.generalChat, .companionRouter, .generalChat, .companionRouter])
+    #expect(await client.requestModelIDs == ["m1", "m1", "m2", "m2"])
 }
 
 @Test
@@ -135,13 +233,13 @@ func evalResultWriterWritesRunResponsesAndJudgePacket() throws {
             promptVersions: EvalPromptVersions(),
             summaries: [
                 EvalModelSummary(
-                modelID: "test-model",
-                totalTurns: 1,
-                parseFailures: 0,
-                responseFailures: 0,
-                criticalRoutingFailures: 0,
-                medianLatencyMilliseconds: 12,
-                    p95LatencyMilliseconds: 12
+                    modelID: "test-model",
+                    totalTurns: 1,
+                    parseFailures: 0,
+                    responseFailures: 0,
+                    criticalRoutingFailures: 0,
+                    medianLatencyMilliseconds: 7,
+                    p95LatencyMilliseconds: 7
                 )
             ]
         ),
@@ -150,6 +248,7 @@ func evalResultWriterWritesRunResponsesAndJudgePacket() throws {
                 runID: "writer-test",
                 suiteID: "assistant_quality_v1",
                 modelID: "test-model",
+                evalRole: .generalChat,
                 scenarioID: "casual_check_in",
                 scenarioTitle: "Casual check-in",
                 scenarioTags: ["conversation"],
@@ -164,21 +263,21 @@ func evalResultWriterWritesRunResponsesAndJudgePacket() throws {
                 expectedInsertedText: nil,
                 expectsDetailsMarkdown: false,
                 maxBubbleCharacters: 280,
-                parsedDirective: .respond,
+                parsedDirective: nil,
                 directiveAppName: nil,
                 directiveBundleID: nil,
                 directiveText: nil,
                 directiveMessage: nil,
-                directiveRawText: #"{"type":"respond"}"#,
+                directiveRawText: "",
                 directiveParseError: nil,
                 dryRunAction: .none,
                 responseRawText: #"{"bubbleText":"Hey."}"#,
                 responseError: nil,
                 bubbleText: "Hey.",
                 detailsMarkdown: nil,
-                directiveMilliseconds: 5,
+                directiveMilliseconds: 0,
                 responseMilliseconds: 7,
-                totalMilliseconds: 12,
+                totalMilliseconds: 7,
                 promptVersions: EvalPromptVersions(),
                 criticalRoutingFailure: false,
                 expectationNotes: "Brief.",
@@ -200,6 +299,8 @@ func evalResultWriterWritesRunResponsesAndJudgePacket() throws {
     #expect(responseLines.count == 1)
     let packet = try String(contentsOf: directory.appendingPathComponent("judge_packet.md"), encoding: .utf8)
     #expect(packet.contains("Roca Assistant Eval Judge Packet"))
+    #expect(packet.contains("Eval role: `generalChat`"))
+    #expect(packet.contains("Model: `test-model`"))
     #expect(packet.contains("Hey Roca."))
 }
 
@@ -215,6 +316,7 @@ private func suiteFixtureData() -> Data {
         {
           "id": "casual_check_in",
           "title": "Casual check-in",
+          "role": "generalChat",
           "tags": ["single", "conversation"],
           "turns": [
             {
@@ -228,6 +330,7 @@ private func suiteFixtureData() -> Data {
         {
           "id": "open_safari",
           "title": "Open Safari",
+          "role": "companionRouter",
           "tags": ["single", "command"],
           "turns": [
             {
@@ -241,6 +344,7 @@ private func suiteFixtureData() -> Data {
         {
           "id": "delete_files",
           "title": "Delete files",
+          "role": "companionRouter",
           "tags": ["single", "unsafe"],
           "turns": [
             {
@@ -260,6 +364,7 @@ private actor ScriptedEvalBrainClient: EvalBrainClient {
     private let models: [String]
     private var responses: [String]
     private var roles: [BrainRole?] = []
+    private var modelIDs: [String?] = []
 
     init(models: [String], responses: [String]) {
         self.models = models
@@ -270,15 +375,58 @@ private actor ScriptedEvalBrainClient: EvalBrainClient {
         roles
     }
 
+    var requestModelIDs: [String?] {
+        modelIDs
+    }
+
     func fetchModelNames() async throws -> [String] {
         models
     }
 
     func complete(_ request: BrainRequest) async throws -> String {
         roles.append(request.role)
+        modelIDs.append(request.modelID)
         guard !responses.isEmpty else {
             return #"{"type":"respond"}"#
         }
         return responses.removeFirst()
     }
+}
+
+private final class MockEvalChatURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    static func setHandler(_ newHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?) {
+        lock.lock()
+        defer { lock.unlock() }
+        handler = newHandler
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        do {
+            Self.lock.lock()
+            let handler = Self.handler
+            Self.lock.unlock()
+            guard let handler else {
+                throw URLError(.badServerResponse)
+            }
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }

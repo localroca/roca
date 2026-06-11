@@ -29,6 +29,8 @@ public struct OllamaModel: Codable, Equatable, Identifiable, Sendable {
 }
 
 public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
+    public static let requestTimeoutSecondsMetadataKey = "requestTimeoutSeconds"
+
     public let id = BuiltInProviderIDs.ollamaBrain
     public let displayName = "Ollama"
     public let capabilities = BrainCapabilities(
@@ -69,7 +71,8 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
             modelID: modelID,
             messages: request.messages,
             stream: false,
-            wantsJSON: wantsJSON
+            wantsJSON: wantsJSON,
+            timeoutInterval: Self.timeoutInterval(from: request.metadata, wantsJSON: wantsJSON)
         )
 
         return AsyncThrowingStream { continuation in
@@ -150,11 +153,12 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
         modelID: String,
         messages: [BrainMessage],
         stream: Bool,
-        wantsJSON: Bool
+        wantsJSON: Bool,
+        timeoutInterval: TimeInterval
     ) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
-        request.timeoutInterval = wantsJSON ? 20 : 300
+        request.timeoutInterval = timeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body = OllamaChatRequest(
             model: modelID,
@@ -164,6 +168,16 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
         )
         request.httpBody = try encoder.encode(body)
         return request
+    }
+
+    private static func timeoutInterval(from metadata: [String: String], wantsJSON: Bool) -> TimeInterval {
+        if let rawTimeout = metadata[requestTimeoutSecondsMetadataKey],
+           let timeout = TimeInterval(rawTimeout),
+           timeout > 0,
+           timeout.isFinite {
+            return timeout
+        }
+        return wantsJSON ? 20 : 300
     }
 
     private static func mappedCompletionError(_ error: Error, providerID: ProviderID, modelID: String) -> Error {

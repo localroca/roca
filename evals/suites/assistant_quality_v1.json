@@ -9,6 +9,7 @@
       "id": "casual_check_in",
       "title": "Casual check-in",
       "description": "A warm, human-feeling answer to a casual greeting.",
+      "role": "generalChat",
       "tags": ["single", "conversation", "persona"],
       "turns": [
         {
@@ -36,6 +37,7 @@
       "id": "favorite_color",
       "title": "Personality",
       "description": "Tests whether the model can answer with a small Roca preference.",
+      "role": "generalChat",
       "tags": ["single", "conversation", "persona"],
       "turns": [
         {
@@ -63,6 +65,7 @@
       "id": "first_use_help",
       "title": "First-use help",
       "description": "Explains Roca's current abilities without overselling future capabilities.",
+      "role": "generalChat",
       "tags": ["single", "help", "product"],
       "turns": [
         {
@@ -90,6 +93,7 @@
       "id": "read_selected_text",
       "title": "Read selected text",
       "description": "Routes an explicit highlighted-text reading request.",
+      "role": "companionRouter",
       "tags": ["single", "command", "read-selection"],
       "turns": [
         {
@@ -116,6 +120,7 @@
       "id": "open_safari",
       "title": "Open app",
       "description": "Routes an explicit app-opening request.",
+      "role": "companionRouter",
       "tags": ["single", "command", "app"],
       "turns": [
         {
@@ -143,6 +148,7 @@
       "id": "quit_notes",
       "title": "Quit app",
       "description": "Routes an explicit app-quitting request.",
+      "role": "companionRouter",
       "tags": ["single", "command", "app"],
       "turns": [
         {
@@ -170,6 +176,7 @@
       "id": "explicit_insert",
       "title": "Explicit insertion",
       "description": "Routes an explicit request to type text into the focused field.",
+      "role": "companionRouter",
       "tags": ["single", "command", "insert"],
       "turns": [
         {
@@ -197,6 +204,7 @@
       "id": "casual_non_insertion_regression",
       "title": "Casual non-insertion regression",
       "description": "Ensures text that includes work/project wording does not get inserted unless explicitly requested.",
+      "role": "companionRouter",
       "tags": ["single", "conversation", "regression", "insert"],
       "turns": [
         {
@@ -224,6 +232,7 @@
       "id": "unsafe_delete_files",
       "title": "Unsafe command",
       "description": "Refuses or marks unsupported broad destructive desktop control.",
+      "role": "companionRouter",
       "tags": ["single", "safety", "unsupported"],
       "turns": [
         {
@@ -250,6 +259,7 @@
       "id": "detailed_llm_checklist",
       "title": "Detailed answer",
       "description": "Uses a short conversational bubble plus Markdown details for an explicitly detailed request.",
+      "role": "generalChat",
       "tags": ["single", "details", "markdown"],
       "turns": [
         {
@@ -278,6 +288,7 @@
       "id": "seq_getting_acquainted",
       "title": "Getting acquainted",
       "description": "Tests short-term conversation context for a user's name.",
+      "role": "generalChat",
       "tags": ["sequential", "memory", "conversation"],
       "turns": [
         {
@@ -339,6 +350,7 @@
       "id": "seq_session_only_memory",
       "title": "Session-only memory",
       "description": "Uses recent context while avoiding durable memory claims.",
+      "role": "generalChat",
       "tags": ["sequential", "memory", "honesty"],
       "turns": [
         {
@@ -383,6 +395,7 @@
       "id": "seq_clarification_open_it",
       "title": "Clarification",
       "description": "Tests ambiguous app command handling and follow-up clarification.",
+      "role": "companionRouter",
       "tags": ["sequential", "command", "clarification", "app"],
       "turns": [
         {

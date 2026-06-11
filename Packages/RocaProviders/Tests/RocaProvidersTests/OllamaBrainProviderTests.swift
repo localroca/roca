@@ -37,6 +37,21 @@ func ollamaModelRecommendationUsesAssistantEvalPolicy() {
     #expect(
         OllamaModelRecommendationPolicy.recommendation(for: "gemma4:12b").status == .discouraged
     )
+    #expect(
+        OllamaModelRecommendationPolicy.recommendation(for: "qwen3:4b-instruct", role: .companionRouter).status == .preferred
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.recommendation(for: "mistral:7b", role: .companionRouter).status == .acceptable
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.recommendation(for: "qwen2.5-coder:7b", role: .generalChat).status == .acceptable
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.recommendation(for: "qwen2.5-coder:7b", role: .companionRouter).status == .discouraged
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.recommendation(for: "gemma4:12b", role: .generalChat).status == .discouraged
+    )
 }
 
 @Test
@@ -86,6 +101,85 @@ func ollamaModelRecommendationSelectableModelsHideUnsupportedModels() {
     #expect(OllamaModelRecommendationPolicy.selectableModels(models).map(\.name) == ["mistral:7b"])
     #expect(OllamaModelRecommendationPolicy.isSelectable("mistral:7b"))
     #expect(!OllamaModelRecommendationPolicy.isSelectable("nomic-embed-text"))
+}
+
+@Test
+func ollamaModelRecommendationUsesRoleSpecificEvidenceBeforeGeneralEvidence() {
+    let evidence = [
+        BrainModelRecommendationEvidence(
+            modelID: "trial-model",
+            totalRequests: 20,
+            parseFailures: 0,
+            responseFailures: 0,
+            criticalRoutingFailures: 0,
+            medianLatencyMilliseconds: 1_200,
+            p95LatencyMilliseconds: 2_000
+        ),
+        BrainModelRecommendationEvidence(
+            modelID: "trial-model",
+            role: .companionRouter,
+            totalRequests: 20,
+            parseFailures: 0,
+            responseFailures: 0,
+            criticalRoutingFailures: 8,
+            medianLatencyMilliseconds: 800,
+            p95LatencyMilliseconds: 1_200
+        )
+    ]
+
+    let routerRecommendation = OllamaModelRecommendationPolicy.recommendation(
+        for: "trial-model",
+        role: .companionRouter,
+        evidence: evidence
+    )
+    let chatRecommendation = OllamaModelRecommendationPolicy.recommendation(
+        for: "trial-model",
+        role: .generalChat,
+        evidence: evidence
+    )
+
+    #expect(routerRecommendation.status == .discouraged)
+    #expect(chatRecommendation.status == .preferred)
+    #expect(routerRecommendation.reason.contains("companion routing eval evidence"))
+    #expect(chatRecommendation.reason.contains("general assistant eval evidence"))
+}
+
+@Test
+func ollamaModelRecommendationSortsWithEvidence() {
+    let models = [
+        OllamaModel(name: "slow-model"),
+        OllamaModel(name: "strong-router")
+    ]
+    let evidence = [
+        BrainModelRecommendationEvidence(
+            modelID: "slow-model",
+            role: .companionRouter,
+            totalRequests: 20,
+            parseFailures: 0,
+            responseFailures: 0,
+            criticalRoutingFailures: 6,
+            medianLatencyMilliseconds: 1_000,
+            p95LatencyMilliseconds: 2_000
+        ),
+        BrainModelRecommendationEvidence(
+            modelID: "strong-router",
+            role: .companionRouter,
+            totalRequests: 20,
+            parseFailures: 0,
+            responseFailures: 0,
+            criticalRoutingFailures: 0,
+            medianLatencyMilliseconds: 1_000,
+            p95LatencyMilliseconds: 2_000
+        )
+    ]
+
+    #expect(
+        OllamaModelRecommendationPolicy.sortedModels(
+            models,
+            role: .companionRouter,
+            evidence: evidence
+        ).map(\.name) == ["strong-router", "slow-model"]
+    )
 }
 
 @Test
@@ -171,7 +265,8 @@ func ollamaProviderUsesNonStreamingChatResponses() async throws {
 
 @Test
 func ollamaProviderMapsChatTimeoutsToModelTimeouts() async throws {
-    MockTimeoutChatURLProtocol.setHandler { _ in
+    MockTimeoutChatURLProtocol.setHandler { request in
+        #expect(request.timeoutInterval == 123)
         throw URLError(.timedOut)
     }
     defer {
@@ -190,7 +285,10 @@ func ollamaProviderMapsChatTimeoutsToModelTimeouts() async throws {
             role: .companionRouter,
             modelID: "gemma4:12b",
             context: RequestContext(selectedText: nil, activeAppBundleID: nil, activeAppName: nil, memoryIDs: []),
-            metadata: ["responseFormat": "json"]
+            metadata: [
+                "responseFormat": "json",
+                OllamaBrainProvider.requestTimeoutSecondsMetadataKey: "123"
+            ]
         )
     )
 

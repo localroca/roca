@@ -86,6 +86,7 @@ public struct EvalScenario: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
     public var description: String?
+    public var role: BrainRole
     public var tags: [String]
     public var turns: [EvalTurn]
 
@@ -93,14 +94,26 @@ public struct EvalScenario: Codable, Equatable, Identifiable, Sendable {
         id: String,
         title: String,
         description: String?,
+        role: BrainRole = .companionRouter,
         tags: [String],
         turns: [EvalTurn]
     ) {
         self.id = id
         self.title = title
         self.description = description
+        self.role = role
         self.tags = tags
         self.turns = turns
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.description = try container.decodeIfPresent(String.self, forKey: .description)
+        self.role = try container.decodeIfPresent(BrainRole.self, forKey: .role) ?? .companionRouter
+        self.tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        self.turns = try container.decode([EvalTurn].self, forKey: .turns)
     }
 }
 

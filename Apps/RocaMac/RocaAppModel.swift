@@ -1047,18 +1047,18 @@ final class RocaAppModel: ObservableObject {
     }
 
     var recommendedOllamaModelID: String? {
-        OllamaModelRecommendationPolicy.recommendedModel(from: ollamaModels, role: .companionRouter)?.id
+        OllamaModelRecommendationPolicy.recommendedModel(from: ollamaModels)?.id
     }
 
     var ollamaModelsForPicker: [OllamaModel] {
-        ollamaModelsForPicker(for: .companionRouter)
+        OllamaModelRecommendationPolicy.selectableModels(ollamaModels)
     }
 
     func ollamaModelsForPicker(for role: BrainRole) -> [OllamaModel] {
         OllamaModelRecommendationPolicy.selectableModels(ollamaModels, role: role)
     }
 
-    func ollamaModelPickerSystemImage(for model: OllamaModel, role: BrainRole = .companionRouter) -> String {
+    func ollamaModelPickerSystemImage(for model: OllamaModel, role: BrainRole? = nil) -> String {
         let recommendation = OllamaModelRecommendationPolicy.recommendation(for: model.id, role: role)
         switch recommendation.status {
         case .preferred:
@@ -1186,7 +1186,7 @@ final class RocaAppModel: ObservableObject {
             persistSettings()
             return
         }
-        guard OllamaModelRecommendationPolicy.isSelectable(modelID, role: .companionRouter) else {
+        guard OllamaModelRecommendationPolicy.isSelectable(modelID) else {
             statusText = "That model is not compatible with Roca assistant chat."
             return
         }

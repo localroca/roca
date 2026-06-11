@@ -53,7 +53,6 @@ public struct EvalRunner: Sendable {
         guard !models.isEmpty else {
             throw EvalError.noModels
         }
-
         let scenarios = configuration.suite.filtered(configuration.filter)
         guard !scenarios.isEmpty else {
             throw EvalError.noScenarios
@@ -65,7 +64,7 @@ public struct EvalRunner: Sendable {
         }
 
         var records: [EvalTurnRecord] = []
-        for model in models {
+        for modelID in models {
             for scenario in scenarios {
                 for repeatIndex in 0 ..< repeats {
                     var conversationMessages: [BrainMessage] = []
@@ -76,7 +75,7 @@ public struct EvalRunner: Sendable {
                             turn: turn,
                             turnIndex: turnIndex,
                             repeatIndex: repeatIndex,
-                            modelID: model,
+                            modelID: modelID,
                             runID: configuration.runID,
                             conversationMessages: &conversationMessages
                         )
@@ -86,8 +85,8 @@ public struct EvalRunner: Sendable {
             }
         }
 
-        let summaries = models.map { model in
-            makeSummary(modelID: model, records: records.filter { $0.modelID == model })
+        let summaries = models.map { modelID in
+            makeSummary(modelID: modelID, records: records.filter { $0.modelID == modelID })
         }
         let run = EvalRunRecord(
             runID: configuration.runID,
@@ -101,18 +100,21 @@ public struct EvalRunner: Sendable {
             scenarioCount: scenarios.count,
             turnCount: records.count,
             promptVersions: EvalPromptVersions(),
-            summaries: summaries
+            summaries: summaries,
+            roleSummaries: makeRoleSummaries(records: records)
         )
         return EvalRunOutput(run: run, turns: records, outputDirectory: configuration.outputDirectory)
     }
 
     private func resolveModels(_ selection: EvalModelSelection) async throws -> [String] {
+        let models: [String]
         switch selection {
         case .all:
-            return try await client.fetchModelNames()
+            models = try await client.fetchModelNames()
         case .names(let names):
-            return names
+            models = names
         }
+        return unique(models)
     }
 
     private func runTurn(
@@ -130,38 +132,41 @@ public struct EvalRunner: Sendable {
             activeAppBundleID: "ai.roca.eval",
             hasFocusedTextInput: true
         )
-        let requestID = BrainRequestID(rawValue: "\(runID)-\(modelID)-\(scenario.id)-\(repeatIndex)-\(turnIndex)")
-        let directiveStartedAt = Date()
+        let requestID = BrainRequestID(rawValue: "\(runID)-\(modelID)-\(scenario.role.rawValue)-\(scenario.id)-\(repeatIndex)-\(turnIndex)")
         var directiveRawText = ""
         var directiveParseError: String?
         var parsedDirective: AssistantDirective?
-        do {
-            directiveRawText = try await client.complete(
-                BrainRequest(
-                    requestID: requestID,
-                    messages: [
-                        BrainMessage(role: .system, content: AssistantPromptCatalog.directiveSystemPrompt),
-                        BrainMessage(
-                            role: .user,
-                            content: AssistantPromptCatalog.directiveUserPrompt(input: turn.user, context: context)
-                        )
-                    ],
-                    role: .companionRouter,
-                    modelID: modelID,
-                    context: RequestContext(
-                        selectedText: nil,
-                        activeAppBundleID: context.activeAppBundleID,
-                        activeAppName: context.activeAppName,
-                        memoryIDs: []
-                    ),
-                    metadata: ["responseFormat": "json"]
+        var directiveMilliseconds = 0
+        if scenario.role == .companionRouter {
+            let directiveStartedAt = Date()
+            do {
+                directiveRawText = try await client.complete(
+                    BrainRequest(
+                        requestID: requestID,
+                        messages: [
+                            BrainMessage(role: .system, content: AssistantPromptCatalog.directiveSystemPrompt),
+                            BrainMessage(
+                                role: .user,
+                                content: AssistantPromptCatalog.directiveUserPrompt(input: turn.user, context: context)
+                            )
+                        ],
+                        role: .companionRouter,
+                        modelID: modelID,
+                        context: RequestContext(
+                            selectedText: nil,
+                            activeAppBundleID: context.activeAppBundleID,
+                            activeAppName: context.activeAppName,
+                            memoryIDs: []
+                        ),
+                        metadata: ["responseFormat": "json"]
+                    )
                 )
-            )
-            parsedDirective = try AssistantPromptCatalog.parseDirective(directiveRawText)
-        } catch {
-            directiveParseError = error.localizedDescription
+                parsedDirective = try AssistantPromptCatalog.parseDirective(directiveRawText)
+            } catch {
+                directiveParseError = error.localizedDescription
+            }
+            directiveMilliseconds = milliseconds(since: directiveStartedAt)
         }
-        let directiveMilliseconds = milliseconds(since: directiveStartedAt)
 
         let responseStartedAt = Date()
         var responseRawText: String?
@@ -170,7 +175,7 @@ public struct EvalRunner: Sendable {
         var responseMilliseconds: Int?
         let dryRunAction = dryRunAction(for: parsedDirective)
 
-        if parsedDirective == .respond {
+        if scenario.role == .generalChat {
             do {
                 responseRawText = try await client.complete(
                     BrainRequest(
@@ -204,6 +209,9 @@ public struct EvalRunner: Sendable {
             runID: runID,
             suiteID: suite.id,
             modelID: modelID,
+            evalRole: scenario.role,
+            routerModelID: modelID,
+            chatModelID: modelID,
             scenarioID: scenario.id,
             scenarioTitle: scenario.title,
             scenarioTags: scenario.tags,
@@ -234,7 +242,9 @@ public struct EvalRunner: Sendable {
             responseMilliseconds: responseMilliseconds,
             totalMilliseconds: directiveMilliseconds + (responseMilliseconds ?? 0),
             promptVersions: EvalPromptVersions(),
-            criticalRoutingFailure: criticalRoutingFailure(for: parsedDirective, turn: turn, parseError: directiveParseError),
+            criticalRoutingFailure: scenario.role == .companionRouter
+                ? criticalRoutingFailure(for: parsedDirective, turn: turn, parseError: directiveParseError)
+                : false,
             expectationNotes: turn.expectations?.notes,
             rubric: turn.rubric
         )
@@ -333,6 +343,50 @@ public struct EvalRunner: Sendable {
         )
     }
 
+    private func makeRoleSummaries(records: [EvalTurnRecord]) -> [EvalRoleModelSummary] {
+        let grouped = Dictionary(grouping: records) { record in
+            RoleModelKey(role: record.evalRole, modelID: record.modelID)
+        }
+        return grouped.map { key, records in
+            let latencies: [Int]
+            switch key.role {
+            case .companionRouter:
+                latencies = records.map(\.directiveMilliseconds).sorted()
+            case .generalChat:
+                latencies = records.compactMap(\.responseMilliseconds).sorted()
+            default:
+                latencies = records.map(\.totalMilliseconds).sorted()
+            }
+            return EvalRoleModelSummary(
+                role: key.role,
+                modelID: key.modelID,
+                totalRequests: records.count,
+                parseFailures: records.filter { $0.directiveParseError != nil }.count,
+                responseFailures: records.filter { $0.responseError != nil }.count,
+                criticalRoutingFailures: records.filter(\.criticalRoutingFailure).count,
+                medianLatencyMilliseconds: percentile(0.5, in: latencies),
+                p95LatencyMilliseconds: percentile(0.95, in: latencies)
+            )
+        }.sorted {
+            if $0.role.rawValue != $1.role.rawValue {
+                return $0.role.rawValue < $1.role.rawValue
+            }
+            return $0.modelID.localizedCaseInsensitiveCompare($1.modelID) == .orderedAscending
+        }
+    }
+
+    private func unique(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            guard seen.insert(value).inserted else {
+                continue
+            }
+            result.append(value)
+        }
+        return result
+    }
+
     private func percentile(_ percentile: Double, in values: [Int]) -> Int? {
         guard !values.isEmpty else {
             return nil
@@ -344,6 +398,11 @@ public struct EvalRunner: Sendable {
 
     private func milliseconds(since start: Date) -> Int {
         Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    private struct RoleModelKey: Hashable {
+        var role: BrainRole
+        var modelID: String
     }
 }
 

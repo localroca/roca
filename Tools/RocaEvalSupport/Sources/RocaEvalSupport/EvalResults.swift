@@ -1,5 +1,6 @@
 import Foundation
 import RocaCore
+import RocaProviders
 
 public struct EvalPromptVersions: Codable, Equatable, Sendable {
     public var directive: String
@@ -11,6 +12,37 @@ public struct EvalPromptVersions: Codable, Equatable, Sendable {
     ) {
         self.directive = directive
         self.response = response
+    }
+}
+
+public struct EvalRoleModelSummary: Codable, Equatable, Sendable {
+    public var role: BrainRole
+    public var modelID: String
+    public var totalRequests: Int
+    public var parseFailures: Int
+    public var responseFailures: Int
+    public var criticalRoutingFailures: Int
+    public var medianLatencyMilliseconds: Int?
+    public var p95LatencyMilliseconds: Int?
+
+    public init(
+        role: BrainRole,
+        modelID: String,
+        totalRequests: Int,
+        parseFailures: Int,
+        responseFailures: Int,
+        criticalRoutingFailures: Int,
+        medianLatencyMilliseconds: Int?,
+        p95LatencyMilliseconds: Int?
+    ) {
+        self.role = role
+        self.modelID = modelID
+        self.totalRequests = totalRequests
+        self.parseFailures = parseFailures
+        self.responseFailures = responseFailures
+        self.criticalRoutingFailures = criticalRoutingFailures
+        self.medianLatencyMilliseconds = medianLatencyMilliseconds
+        self.p95LatencyMilliseconds = p95LatencyMilliseconds
     }
 }
 
@@ -27,6 +59,7 @@ public struct EvalRunRecord: Codable, Equatable, Sendable {
     public var turnCount: Int
     public var promptVersions: EvalPromptVersions
     public var summaries: [EvalModelSummary]
+    public var roleSummaries: [EvalRoleModelSummary]
 
     public init(
         runID: String,
@@ -40,7 +73,8 @@ public struct EvalRunRecord: Codable, Equatable, Sendable {
         scenarioCount: Int,
         turnCount: Int,
         promptVersions: EvalPromptVersions,
-        summaries: [EvalModelSummary]
+        summaries: [EvalModelSummary],
+        roleSummaries: [EvalRoleModelSummary] = []
     ) {
         self.runID = runID
         self.suiteID = suiteID
@@ -54,6 +88,34 @@ public struct EvalRunRecord: Codable, Equatable, Sendable {
         self.turnCount = turnCount
         self.promptVersions = promptVersions
         self.summaries = summaries
+        self.roleSummaries = roleSummaries
+    }
+
+    public var recommendationEvidence: [BrainModelRecommendationEvidence] {
+        let generalEvidence = summaries.map { summary in
+            return BrainModelRecommendationEvidence(
+                modelID: summary.modelID,
+                totalRequests: summary.totalTurns,
+                parseFailures: summary.parseFailures,
+                responseFailures: summary.responseFailures,
+                criticalRoutingFailures: summary.criticalRoutingFailures,
+                medianLatencyMilliseconds: summary.medianLatencyMilliseconds,
+                p95LatencyMilliseconds: summary.p95LatencyMilliseconds
+            )
+        }
+        let roleEvidence = roleSummaries.map { summary in
+            BrainModelRecommendationEvidence(
+                modelID: summary.modelID,
+                role: summary.role,
+                totalRequests: summary.totalRequests,
+                parseFailures: summary.parseFailures,
+                responseFailures: summary.responseFailures,
+                criticalRoutingFailures: summary.criticalRoutingFailures,
+                medianLatencyMilliseconds: summary.medianLatencyMilliseconds,
+                p95LatencyMilliseconds: summary.p95LatencyMilliseconds
+            )
+        }
+        return generalEvidence + roleEvidence
     }
 }
 
@@ -89,6 +151,9 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
     public var runID: String
     public var suiteID: String
     public var modelID: String
+    public var evalRole: BrainRole
+    public var routerModelID: String
+    public var chatModelID: String
     public var scenarioID: String
     public var scenarioTitle: String
     public var scenarioTags: [String]
@@ -127,6 +192,9 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
         runID: String,
         suiteID: String,
         modelID: String,
+        evalRole: BrainRole = .companionRouter,
+        routerModelID: String? = nil,
+        chatModelID: String? = nil,
         scenarioID: String,
         scenarioTitle: String,
         scenarioTags: [String],
@@ -164,6 +232,9 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
         self.runID = runID
         self.suiteID = suiteID
         self.modelID = modelID
+        self.evalRole = evalRole
+        self.routerModelID = routerModelID ?? modelID
+        self.chatModelID = chatModelID ?? modelID
         self.scenarioID = scenarioID
         self.scenarioTitle = scenarioTitle
         self.scenarioTags = scenarioTags
@@ -260,6 +331,7 @@ public enum EvalResultWriter {
         lines.append("- Run ID: `\(output.run.runID)`")
         lines.append("- Suite: `\(output.run.suiteID)`")
         lines.append("- Models: \(output.run.models.map { "`\($0)`" }.joined(separator: ", "))")
+        lines.append("- Roles: \(unique(output.turns.map(\.evalRole)).map { "`\($0.rawValue)`" }.joined(separator: ", "))")
         lines.append("- Repeats: \(output.run.repeats)")
         lines.append("- Prompt versions: directive `\(output.run.promptVersions.directive)`, response `\(output.run.promptVersions.response)`")
         lines.append("")
@@ -279,6 +351,22 @@ public enum EvalResultWriter {
         lines.append("")
         lines.append("Latency is tracked separately and should not affect the quality score.")
 
+        if !output.run.roleSummaries.isEmpty {
+            lines.append("")
+            lines.append("## Role Summaries")
+            for summary in output.run.roleSummaries {
+                lines.append("")
+                lines.append("### \(roleLabel(summary.role)) `\(summary.modelID)`")
+                lines.append("")
+                lines.append("- Requests: \(summary.totalRequests)")
+                lines.append("- Parse failures: \(summary.parseFailures)")
+                lines.append("- Response failures: \(summary.responseFailures)")
+                lines.append("- Critical routing failures: \(summary.criticalRoutingFailures)")
+                lines.append("- Median latency: \(formatMilliseconds(summary.medianLatencyMilliseconds))")
+                lines.append("- P95 latency: \(formatMilliseconds(summary.p95LatencyMilliseconds))")
+            }
+        }
+
         for summary in output.run.summaries {
             lines.append("")
             lines.append("## Model `\(summary.modelID)`")
@@ -297,15 +385,19 @@ public enum EvalResultWriter {
                 lines.append("")
                 lines.append("- Scenario ID: `\(record.scenarioID)`")
                 lines.append("- Tags: \(record.scenarioTags.map { "`\($0)`" }.joined(separator: ", "))")
-                lines.append("- Expected directive(s): \(record.expectedDirectives.map { "`\($0.rawValue)`" }.joined(separator: ", "))")
-                if let expectedAppName = record.expectedAppName {
-                    lines.append("- Expected app name: `\(expectedAppName)`")
-                }
-                if let expectedBundleID = record.expectedBundleID {
-                    lines.append("- Expected bundle ID: `\(expectedBundleID)`")
-                }
-                if let expectedInsertedText = record.expectedInsertedText {
-                    lines.append("- Expected inserted text: \(inlineCode(expectedInsertedText))")
+                lines.append("- Eval role: `\(record.evalRole.rawValue)`")
+                lines.append("- Model: `\(record.modelID)`")
+                if record.evalRole == .companionRouter {
+                    lines.append("- Expected directive(s): \(record.expectedDirectives.map { "`\($0.rawValue)`" }.joined(separator: ", "))")
+                    if let expectedAppName = record.expectedAppName {
+                        lines.append("- Expected app name: `\(expectedAppName)`")
+                    }
+                    if let expectedBundleID = record.expectedBundleID {
+                        lines.append("- Expected bundle ID: `\(expectedBundleID)`")
+                    }
+                    if let expectedInsertedText = record.expectedInsertedText {
+                        lines.append("- Expected inserted text: \(inlineCode(expectedInsertedText))")
+                    }
                 }
                 if let expectsDetailsMarkdown = record.expectsDetailsMarkdown {
                     lines.append("- Expects details Markdown: \(expectsDetailsMarkdown ? "yes" : "no")")
@@ -313,8 +405,10 @@ public enum EvalResultWriter {
                 if let maxBubbleCharacters = record.maxBubbleCharacters {
                     lines.append("- Max bubble characters: \(maxBubbleCharacters)")
                 }
-                lines.append("- Parsed directive: `\(record.parsedDirective?.rawValue ?? "parseFailure")`")
-                lines.append("- Dry-run action: `\(record.dryRunAction.rawValue)`")
+                if record.evalRole == .companionRouter {
+                    lines.append("- Parsed directive: `\(record.parsedDirective?.rawValue ?? "parseFailure")`")
+                    lines.append("- Dry-run action: `\(record.dryRunAction.rawValue)`")
+                }
                 lines.append("- Latency: \(record.totalMilliseconds) ms")
                 if record.criticalRoutingFailure {
                     lines.append("- Critical routing failure: yes")
@@ -401,5 +495,34 @@ public enum EvalResultWriter {
 
     private static func formatMilliseconds(_ value: Int?) -> String {
         value.map { "\($0) ms" } ?? "n/a"
+    }
+
+    private static func unique<T: Hashable>(_ values: [T]) -> [T] {
+        var seen = Set<T>()
+        var result: [T] = []
+        for value in values {
+            guard seen.insert(value).inserted else {
+                continue
+            }
+            result.append(value)
+        }
+        return result
+    }
+
+    private static func roleLabel(_ role: BrainRole) -> String {
+        switch role {
+        case .companionRouter:
+            "Companion Routing"
+        case .generalChat:
+            "General Chat"
+        case .coding:
+            "Coding"
+        case .writing:
+            "Writing"
+        case .localPrivate:
+            "Local Private"
+        case .cloudQuality:
+            "Cloud Quality"
+        }
     }
 }

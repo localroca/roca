@@ -8,10 +8,18 @@ public protocol EvalBrainClient: Sendable {
 }
 
 public final class OllamaEvalBrainClient: EvalBrainClient, @unchecked Sendable {
-    private let provider: OllamaBrainProvider
+    public static let defaultRequestTimeoutSeconds: TimeInterval = 600
 
-    public init(baseURL: URL = URL(string: "http://127.0.0.1:11434")!) {
-        self.provider = OllamaBrainProvider(baseURL: baseURL)
+    private let provider: OllamaBrainProvider
+    private let requestTimeoutSeconds: TimeInterval
+
+    public init(
+        baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
+        session: URLSession = .shared,
+        requestTimeoutSeconds: TimeInterval = OllamaEvalBrainClient.defaultRequestTimeoutSeconds
+    ) {
+        self.provider = OllamaBrainProvider(baseURL: baseURL, session: session)
+        self.requestTimeoutSeconds = requestTimeoutSeconds
     }
 
     public func fetchModelNames() async throws -> [String] {
@@ -20,6 +28,12 @@ public final class OllamaEvalBrainClient: EvalBrainClient, @unchecked Sendable {
     }
 
     public func complete(_ request: BrainRequest) async throws -> String {
+        var request = request
+        if request.metadata[OllamaBrainProvider.requestTimeoutSecondsMetadataKey] == nil,
+           requestTimeoutSeconds > 0,
+           requestTimeoutSeconds.isFinite {
+            request.metadata[OllamaBrainProvider.requestTimeoutSecondsMetadataKey] = "\(Int(requestTimeoutSeconds))"
+        }
         let events = try await provider.complete(request)
         return try await Self.finalText(from: events)
     }
