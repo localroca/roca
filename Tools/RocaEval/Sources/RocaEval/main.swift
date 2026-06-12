@@ -32,8 +32,13 @@ struct RocaEvalCommand {
                     )
                 )
                 try EvalResultWriter.write(output)
+                try EvalAssessmentWriter.writeAssessments(
+                    for: output,
+                    to: configuration.assessmentsURL ?? Self.defaultAssessmentsDirectory()
+                )
                 print("RocaEval wrote results to \(output.outputDirectory.path)")
                 print("Judge packet: \(output.outputDirectory.appendingPathComponent("judge_packet.md").path)")
+                print("Model assessments: \((configuration.assessmentsURL ?? Self.defaultAssessmentsDirectory()).path)")
             }
         } catch {
             fputs("RocaEval error: \(error.localizedDescription)\n\n\(Self.usage)\n", stderr)
@@ -46,6 +51,16 @@ struct RocaEvalCommand {
             .appendingPathComponent("evals", isDirectory: true)
             .appendingPathComponent("results", isDirectory: true)
             .appendingPathComponent(runID, isDirectory: true)
+    }
+
+    private static func defaultAssessmentsDirectory() -> URL {
+        URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Packages", isDirectory: true)
+            .appendingPathComponent("RocaProviders", isDirectory: true)
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("RocaProviders", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("ModelAssessments", isDirectory: true)
     }
 
     private static let usage = """
@@ -61,6 +76,8 @@ struct RocaEvalCommand {
       --repeats N           Repeat count. Default: suite default, usually 3
       --base-url URL        Ollama base URL. Default: http://127.0.0.1:11434
       --out PATH            Output directory. Default: evals/results/<run-id>
+      --assessments-out PATH
+                            Compact tracked model assessment directory.
     """
 }
 
@@ -78,6 +95,7 @@ private struct RunCommandConfiguration {
     var repeats: Int?
     var baseURL = URL(string: "http://127.0.0.1:11434")!
     var outputURL: URL?
+    var assessmentsURL: URL?
 }
 
 private struct CommandOptions {
@@ -136,6 +154,8 @@ private struct CommandOptions {
                 configuration.baseURL = url
             case "--out":
                 configuration.outputURL = URL(fileURLWithPath: try value(), isDirectory: true)
+            case "--assessments-out":
+                configuration.assessmentsURL = URL(fileURLWithPath: try value(), isDirectory: true)
             default:
                 throw EvalError.invalidArguments("Unknown option: \(option)")
             }

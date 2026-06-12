@@ -404,7 +404,11 @@ private struct AssistantSettingsPane: View {
                     ) {
                         Text("Choose Model").tag(Optional<String>.none)
                         ForEach(model.ollamaModelsForPicker) { item in
-                            Label(item.displayName, systemImage: model.ollamaModelPickerSystemImage(for: item))
+                            OllamaModelPickerLabel(
+                                title: item.displayName,
+                                qualitySystemImage: model.ollamaModelPickerSystemImage(for: item),
+                                speedSystemImage: model.ollamaModelSpeedSystemImage(for: item)
+                            )
                                 .tag(Optional(item.id))
                         }
                     }
@@ -422,7 +426,11 @@ private struct AssistantSettingsPane: View {
                                 ) {
                                     Text("Choose Model").tag(Optional<String>.none)
                                     ForEach(model.ollamaModelsForPicker(for: .companionRouter)) { item in
-                                        Label(item.displayName, systemImage: model.ollamaModelPickerSystemImage(for: item, role: .companionRouter))
+                                        OllamaModelPickerLabel(
+                                            title: item.displayName,
+                                            qualitySystemImage: model.ollamaModelPickerSystemImage(for: item, role: .companionRouter),
+                                            speedSystemImage: model.ollamaModelSpeedSystemImage(for: item, role: .companionRouter)
+                                        )
                                             .tag(Optional(item.id))
                                     }
                                 }
@@ -440,7 +448,11 @@ private struct AssistantSettingsPane: View {
                                 ) {
                                     Text("Same as Model").tag(Optional<String>.none)
                                     ForEach(model.ollamaModelsForPicker(for: .generalChat)) { item in
-                                        Label(item.displayName, systemImage: model.ollamaModelPickerSystemImage(for: item, role: .generalChat))
+                                        OllamaModelPickerLabel(
+                                            title: item.displayName,
+                                            qualitySystemImage: model.ollamaModelPickerSystemImage(for: item, role: .generalChat),
+                                            speedSystemImage: model.ollamaModelSpeedSystemImage(for: item, role: .generalChat)
+                                        )
                                             .tag(Optional(item.id))
                                     }
                                 }
@@ -1207,7 +1219,11 @@ private struct AssistantSetupView: View {
                     )
                 ) {
                     ForEach(model.ollamaModelsForPicker) { item in
-                        Label(item.displayName, systemImage: model.ollamaModelPickerSystemImage(for: item))
+                        OllamaModelPickerLabel(
+                            title: item.displayName,
+                            qualitySystemImage: model.ollamaModelPickerSystemImage(for: item),
+                            speedSystemImage: model.ollamaModelSpeedSystemImage(for: item)
+                        )
                             .tag(Optional(item.id))
                     }
                 }
@@ -1263,6 +1279,29 @@ private struct AssistantSetupView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+        }
+    }
+}
+
+private struct OllamaModelPickerLabel: View {
+    var title: String
+    var qualitySystemImage: String
+    var speedSystemImage: String
+
+    var body: some View {
+        Label("\(title) \(speedGlyph)", systemImage: qualitySystemImage)
+    }
+
+    private var speedGlyph: String {
+        switch speedSystemImage {
+        case "bolt.fill":
+            "⚡"
+        case "speedometer":
+            "◷"
+        case "tortoise.fill":
+            "🐢"
+        default:
+            "?"
         }
     }
 }

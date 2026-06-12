@@ -1074,6 +1074,20 @@ final class RocaAppModel: ObservableObject {
         }
     }
 
+    func ollamaModelSpeedSystemImage(for model: OllamaModel, role: BrainRole? = nil) -> String {
+        let recommendation = OllamaModelRecommendationPolicy.speedRecommendation(for: model, role: role)
+        switch recommendation.status {
+        case .fast:
+            return "bolt.fill"
+        case .okay:
+            return "speedometer"
+        case .slow:
+            return "tortoise.fill"
+        case .unknown:
+            return "questionmark.circle"
+        }
+    }
+
     private var assistantBrainSelection: BrainProviderSelection? {
         assistantBrainSelection(for: .companionRouter)
     }

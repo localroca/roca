@@ -44,13 +44,27 @@ func ollamaModelRecommendationUsesAssistantEvalPolicy() {
         OllamaModelRecommendationPolicy.recommendation(for: "mistral:7b", role: .companionRouter).status == .acceptable
     )
     #expect(
-        OllamaModelRecommendationPolicy.recommendation(for: "qwen2.5-coder:7b", role: .generalChat).status == .acceptable
+        OllamaModelRecommendationPolicy.recommendation(for: "qwen2.5-coder:7b", role: .generalChat).status == .preferred
     )
     #expect(
         OllamaModelRecommendationPolicy.recommendation(for: "qwen2.5-coder:7b", role: .companionRouter).status == .discouraged
     )
     #expect(
-        OllamaModelRecommendationPolicy.recommendation(for: "gemma4:12b", role: .generalChat).status == .discouraged
+        OllamaModelRecommendationPolicy.recommendation(for: "gemma4:12b", role: .generalChat).status == .preferred
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.speedRecommendation(
+            for: "gemma4:12b",
+            role: .generalChat,
+            deviceProfile: ModelAssessmentDeviceProfile(id: "apple-m2-pro-16gb", chip: "Apple M2 Pro", memoryGB: 16)
+        ).status == .slow
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.speedRecommendation(
+            for: "qwen3:4b-instruct",
+            role: .generalChat,
+            deviceProfile: ModelAssessmentDeviceProfile(id: "apple-m2-pro-16gb", chip: "Apple M2 Pro", memoryGB: 16)
+        ).status == .okay
     )
 }
 
@@ -101,6 +115,51 @@ func ollamaModelRecommendationSelectableModelsHideUnsupportedModels() {
     #expect(OllamaModelRecommendationPolicy.selectableModels(models).map(\.name) == ["mistral:7b"])
     #expect(OllamaModelRecommendationPolicy.isSelectable("mistral:7b"))
     #expect(!OllamaModelRecommendationPolicy.isSelectable("nomic-embed-text"))
+}
+
+@Test
+func ollamaModelRecommendationEstimatesSpeedByDeviceMemory() {
+    let smallMac = ModelAssessmentDeviceProfile(id: "apple-m1-8gb", chip: "Apple M1", memoryGB: 8)
+    let mediumMac = ModelAssessmentDeviceProfile(id: "apple-m2-pro-16gb-test", chip: "Apple M2 Pro", memoryGB: 16)
+    let largeMac = ModelAssessmentDeviceProfile(id: "apple-m3-max-64gb", chip: "Apple M3 Max", memoryGB: 64)
+
+    #expect(
+        OllamaModelRecommendationPolicy.speedRecommendation(
+            for: "trial:12b",
+            deviceProfile: smallMac
+        ).status == .slow
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.speedRecommendation(
+            for: "trial:7b",
+            deviceProfile: mediumMac
+        ).status == .okay
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.speedRecommendation(
+            for: "trial:12b",
+            deviceProfile: largeMac
+        ).status == .okay
+    )
+    #expect(
+        OllamaModelRecommendationPolicy.speedRecommendation(
+            for: "mystery-model",
+            deviceProfile: largeMac
+        ).status == .unknown
+    )
+}
+
+@Test
+func modelAssessmentDeviceProfileUsesChipSpecificStableIDs() {
+    #expect(
+        ModelAssessmentDeviceProfile.stableID(chip: "Apple M1", memoryGB: 16) == "apple-m1-16gb"
+    )
+    #expect(
+        ModelAssessmentDeviceProfile.stableID(chip: "Apple M2 Pro", memoryGB: 16) == "apple-m2-pro-16gb"
+    )
+    #expect(
+        ModelAssessmentDeviceProfile.stableID(chip: "Apple M3 Max", memoryGB: 64) == "apple-m3-max-64gb"
+    )
 }
 
 @Test

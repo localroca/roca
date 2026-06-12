@@ -37,6 +37,9 @@ SwiftPM keeps build products and dependency checkouts in the repo-local ignored
 `.build` directory by default. The module cache path avoids polluting the
 default user cache during scripted checks.
 
+Model evaluation workflow is documented in
+[Model Evaluations](model-evaluations.md).
+
 ## Build The Mac App From The Command Line
 
 ```sh

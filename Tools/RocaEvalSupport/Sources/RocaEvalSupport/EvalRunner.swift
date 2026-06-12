@@ -1,5 +1,6 @@
 import Foundation
 import RocaCore
+import RocaProviders
 
 public struct EvalRunConfiguration: Equatable, Sendable {
     public var suite: EvalSuite
@@ -49,6 +50,7 @@ public struct EvalRunner: Sendable {
 
     public func run(_ configuration: EvalRunConfiguration) async throws -> EvalRunOutput {
         let startedAt = Date()
+        let deviceProfile = ModelAssessmentDeviceProfile.current()
         let models = try await resolveModels(configuration.models)
         guard !models.isEmpty else {
             throw EvalError.noModels
@@ -99,6 +101,7 @@ public struct EvalRunner: Sendable {
             repeats: repeats,
             scenarioCount: scenarios.count,
             turnCount: records.count,
+            deviceProfile: deviceProfile,
             promptVersions: EvalPromptVersions(),
             summaries: summaries,
             roleSummaries: makeRoleSummaries(records: records)

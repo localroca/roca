@@ -1,6 +1,7 @@
 import Foundation
 import RocaCore
 import RocaEvalSupport
+import RocaProviders
 import Testing
 
 @Test
@@ -68,6 +69,31 @@ func ollamaEvalBrainClientUsesGenerousRequestTimeout() async throws {
     )
 
     #expect(response == #"{"type":"respond"}"#)
+}
+
+@Test
+func ollamaEvalBrainClientEnforcesWallClockTimeout() async {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [SlowEvalChatURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let client = OllamaEvalBrainClient(
+        baseURL: URL(string: "http://127.0.0.1:11434")!,
+        session: session,
+        requestTimeoutSeconds: 0.05
+    )
+
+    await #expect(throws: RocaError.providerTimedOut(providerID: BuiltInProviderIDs.ollamaBrain, modelID: "slow-model")) {
+        _ = try await client.complete(
+            BrainRequest(
+                requestID: BrainRequestID(rawValue: "eval-timeout-request"),
+                messages: [BrainMessage(role: .user, content: "hello")],
+                role: .companionRouter,
+                modelID: "slow-model",
+                context: RequestContext(selectedText: nil, activeAppBundleID: nil, activeAppName: nil, memoryIDs: []),
+                metadata: ["responseFormat": "json"]
+            )
+        )
+    }
 }
 
 @Test
@@ -304,6 +330,103 @@ func evalResultWriterWritesRunResponsesAndJudgePacket() throws {
     #expect(packet.contains("Hey Roca."))
 }
 
+@Test
+func evalAssessmentWriterMergesHardwareSpeedProfiles() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("roca-eval-assessments-\(UUID().uuidString)", isDirectory: true)
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let smallOutput = assessmentOutput(
+        runID: "small-run",
+        modelID: "trial:7b",
+        deviceProfile: ModelAssessmentDeviceProfile(id: "apple-m1-8gb", chip: "Apple M1", memoryGB: 8),
+        routerP95: 4_000,
+        chatP95: 18_000
+    )
+    let largeOutput = assessmentOutput(
+        runID: "large-run",
+        modelID: "trial:7b",
+        deviceProfile: ModelAssessmentDeviceProfile(id: "apple-m3-max-64gb", chip: "Apple M3 Max", memoryGB: 64),
+        routerP95: 900,
+        chatP95: 1_400
+    )
+
+    try EvalAssessmentWriter.writeAssessments(for: smallOutput, to: directory)
+    try EvalAssessmentWriter.writeAssessments(for: largeOutput, to: directory)
+
+    let url = directory.appendingPathComponent("trial-7b.json")
+    let data = try Data(contentsOf: url)
+    let assessment = try JSONDecoder().decode(OllamaModelAssessment.self, from: data)
+
+    #expect(assessment.modelID == "trial:7b")
+    #expect(assessment.speed["apple-m1-8gb"]?.status == .slow)
+    #expect(assessment.speed["apple-m3-max-64gb"]?.status == .fast)
+    #expect(assessment.quality["companionRouter"]?.totalRequests == 24)
+}
+
+private func assessmentOutput(
+    runID: String,
+    modelID: String,
+    deviceProfile: ModelAssessmentDeviceProfile,
+    routerP95: Int,
+    chatP95: Int
+) -> EvalRunOutput {
+    let roleSummaries = [
+        EvalRoleModelSummary(
+            role: .companionRouter,
+            modelID: modelID,
+            totalRequests: 24,
+            parseFailures: 0,
+            responseFailures: 0,
+            criticalRoutingFailures: 0,
+            medianLatencyMilliseconds: routerP95 / 2,
+            p95LatencyMilliseconds: routerP95
+        ),
+        EvalRoleModelSummary(
+            role: .generalChat,
+            modelID: modelID,
+            totalRequests: 27,
+            parseFailures: 0,
+            responseFailures: 0,
+            criticalRoutingFailures: 0,
+            medianLatencyMilliseconds: chatP95 / 2,
+            p95LatencyMilliseconds: chatP95
+        )
+    ]
+    return EvalRunOutput(
+        run: EvalRunRecord(
+            runID: runID,
+            suiteID: "assistant_quality_v1",
+            suiteTitle: "Assistant Quality Baseline",
+            startedAt: Date(timeIntervalSince1970: 0),
+            completedAt: Date(timeIntervalSince1970: 1),
+            baseURL: "http://127.0.0.1:11434",
+            models: [modelID],
+            repeats: 1,
+            scenarioCount: 2,
+            turnCount: 2,
+            deviceProfile: deviceProfile,
+            promptVersions: EvalPromptVersions(),
+            summaries: [
+                EvalModelSummary(
+                    modelID: modelID,
+                    totalTurns: 51,
+                    parseFailures: 0,
+                    responseFailures: 0,
+                    criticalRoutingFailures: 0,
+                    medianLatencyMilliseconds: 1_000,
+                    p95LatencyMilliseconds: max(routerP95, chatP95)
+                )
+            ],
+            roleSummaries: roleSummaries
+        ),
+        turns: [],
+        outputDirectory: URL(fileURLWithPath: "/tmp/roca-eval-test")
+    )
+}
+
 private func suiteFixtureData() -> Data {
     """
     {
@@ -426,6 +549,37 @@ private final class MockEvalChatURLProtocol: URLProtocol, @unchecked Sendable {
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class SlowEvalChatURLProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Thread.sleep(forTimeInterval: 0.20)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        let data = """
+        {
+          "message": {"role": "assistant", "content": "{\\"type\\":\\"respond\\"}"},
+          "done": true
+        }
+        """.data(using: .utf8)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
     }
 
     override func stopLoading() {}

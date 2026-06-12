@@ -38,6 +38,7 @@ let package = Package(
             path: "Packages/RocaProviders/Sources/RocaProviders",
             resources: [
                 .process("Resources/kokoro-mlx.json"),
+                .process("Resources/ModelAssessments"),
                 .process("Resources/moonshine-medium-streaming-en.json")
             ]
         ),

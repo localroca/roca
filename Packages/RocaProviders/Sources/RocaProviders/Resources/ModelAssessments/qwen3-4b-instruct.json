@@ -1,0 +1,55 @@
+{
+  "aliases" : [
+
+  ],
+  "displayName" : "Qwen 3 4B Instruct",
+  "lastUpdatedAt" : "2026-06-11T23:40:08.795Z",
+  "modelID" : "qwen3:4b-instruct",
+  "quality" : {
+    "companionRouter" : {
+      "criticalRoutingFailures" : 3,
+      "lastUpdatedAt" : "2026-06-11T23:40:08.795Z",
+      "parseFailures" : 0,
+      "reason" : "Roca has companion routing eval evidence for this model: 3\/24 failures.",
+      "responseFailures" : 0,
+      "sourceRunID" : "20260611-190228Z",
+      "status" : "preferred",
+      "totalRequests" : 24
+    },
+    "generalChat" : {
+      "criticalRoutingFailures" : 0,
+      "lastUpdatedAt" : "2026-06-11T23:40:08.795Z",
+      "parseFailures" : 0,
+      "reason" : "Roca has general chat eval evidence for this model: 0\/27 failures.",
+      "responseFailures" : 0,
+      "sourceRunID" : "20260611-190228Z",
+      "status" : "preferred",
+      "totalRequests" : 27
+    }
+  },
+  "schemaVersion" : 1,
+  "speed" : {
+    "apple-m2-pro-16gb" : {
+      "companionRouter" : {
+        "medianMs" : 447,
+        "p95Ms" : 1270,
+        "sampleCount" : 24
+      },
+      "deviceProfile" : {
+        "chip" : "Apple M2 Pro",
+        "id" : "apple-m2-pro-16gb",
+        "memoryGB" : 16,
+        "os" : "macOS 26.5.1"
+      },
+      "generalChat" : {
+        "medianMs" : 885,
+        "p95Ms" : 4061,
+        "sampleCount" : 27
+      },
+      "lastUpdatedAt" : "2026-06-11T23:40:08.795Z",
+      "reason" : "Measured usable on this 16GB Mac profile.",
+      "sourceRunID" : "20260611-190228Z",
+      "status" : "okay"
+    }
+  }
+}

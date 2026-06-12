@@ -8,7 +8,7 @@ public protocol EvalBrainClient: Sendable {
 }
 
 public final class OllamaEvalBrainClient: EvalBrainClient, @unchecked Sendable {
-    public static let defaultRequestTimeoutSeconds: TimeInterval = 600
+    public static let defaultRequestTimeoutSeconds: TimeInterval = 300
 
     private let provider: OllamaBrainProvider
     private let requestTimeoutSeconds: TimeInterval
@@ -29,13 +29,30 @@ public final class OllamaEvalBrainClient: EvalBrainClient, @unchecked Sendable {
 
     public func complete(_ request: BrainRequest) async throws -> String {
         var request = request
+        let timeoutSeconds = Self.timeoutSeconds(
+            from: request.metadata[OllamaBrainProvider.requestTimeoutSecondsMetadataKey],
+            fallback: requestTimeoutSeconds
+        )
         if request.metadata[OllamaBrainProvider.requestTimeoutSecondsMetadataKey] == nil,
            requestTimeoutSeconds > 0,
            requestTimeoutSeconds.isFinite {
-            request.metadata[OllamaBrainProvider.requestTimeoutSecondsMetadataKey] = "\(Int(requestTimeoutSeconds))"
+            request.metadata[OllamaBrainProvider.requestTimeoutSecondsMetadataKey] = "\(requestTimeoutSeconds)"
         }
+        let provider = self.provider
+        let requestID = request.requestID
         let events = try await provider.complete(request)
-        return try await Self.finalText(from: events)
+        do {
+            return try await Self.withWallClockTimeout(
+                seconds: timeoutSeconds,
+                onTimeout: { await provider.cancel(requestID) },
+                operation: { try await Self.finalText(from: events) }
+            )
+        } catch is EvalRequestTimedOut {
+            throw RocaError.providerTimedOut(
+                providerID: provider.id,
+                modelID: request.modelID ?? "unknown"
+            )
+        }
     }
 
     private static func finalText(from events: AsyncThrowingStream<BrainEvent, Error>) async throws -> String {
@@ -55,6 +72,56 @@ public final class OllamaEvalBrainClient: EvalBrainClient, @unchecked Sendable {
         }
         return (finalText ?? accumulated).trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    private static func withWallClockTimeout<T: Sendable>(
+        seconds: TimeInterval?,
+        onTimeout: @escaping @Sendable () async -> Void,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        guard let seconds, seconds > 0, seconds.isFinite else {
+            return try await operation()
+        }
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            defer {
+                group.cancelAll()
+            }
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds(for: seconds))
+                await onTimeout()
+                throw EvalRequestTimedOut()
+            }
+            guard let result = try await group.next() else {
+                throw RocaError.cancelled
+            }
+            return result
+        }
+    }
+
+    private static func timeoutSeconds(from rawValue: String?, fallback: TimeInterval) -> TimeInterval? {
+        if let rawValue,
+           let seconds = TimeInterval(rawValue),
+           seconds > 0,
+           seconds.isFinite {
+            return seconds
+        }
+        guard fallback > 0, fallback.isFinite else {
+            return nil
+        }
+        return fallback
+    }
+
+    private static func timeoutNanoseconds(for seconds: TimeInterval) -> UInt64 {
+        let nanoseconds = seconds * 1_000_000_000
+        guard nanoseconds < Double(UInt64.max) else {
+            return UInt64.max
+        }
+        return UInt64(nanoseconds.rounded(.up))
+    }
+
+    private struct EvalRequestTimedOut: Error {}
 }
 
 public enum EvalModelSelection: Equatable, Sendable {

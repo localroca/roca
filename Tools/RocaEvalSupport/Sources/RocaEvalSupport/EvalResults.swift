@@ -57,6 +57,7 @@ public struct EvalRunRecord: Codable, Equatable, Sendable {
     public var repeats: Int
     public var scenarioCount: Int
     public var turnCount: Int
+    public var deviceProfile: ModelAssessmentDeviceProfile
     public var promptVersions: EvalPromptVersions
     public var summaries: [EvalModelSummary]
     public var roleSummaries: [EvalRoleModelSummary]
@@ -72,6 +73,7 @@ public struct EvalRunRecord: Codable, Equatable, Sendable {
         repeats: Int,
         scenarioCount: Int,
         turnCount: Int,
+        deviceProfile: ModelAssessmentDeviceProfile = .current(),
         promptVersions: EvalPromptVersions,
         summaries: [EvalModelSummary],
         roleSummaries: [EvalRoleModelSummary] = []
@@ -86,6 +88,7 @@ public struct EvalRunRecord: Codable, Equatable, Sendable {
         self.repeats = repeats
         self.scenarioCount = scenarioCount
         self.turnCount = turnCount
+        self.deviceProfile = deviceProfile
         self.promptVersions = promptVersions
         self.summaries = summaries
         self.roleSummaries = roleSummaries
@@ -332,6 +335,7 @@ public enum EvalResultWriter {
         lines.append("- Suite: `\(output.run.suiteID)`")
         lines.append("- Models: \(output.run.models.map { "`\($0)`" }.joined(separator: ", "))")
         lines.append("- Roles: \(unique(output.turns.map(\.evalRole)).map { "`\($0.rawValue)`" }.joined(separator: ", "))")
+        lines.append("- Device profile: `\(output.run.deviceProfile.id)`")
         lines.append("- Repeats: \(output.run.repeats)")
         lines.append("- Prompt versions: directive `\(output.run.promptVersions.directive)`, response `\(output.run.promptVersions.response)`")
         lines.append("")
