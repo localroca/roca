@@ -682,6 +682,118 @@ private struct PermissionsSettingsPane: View {
                     }
                 }
             }
+
+            SettingsSection("Remembered Approvals") {
+                if model.approvalRecords.isEmpty {
+                    Text("No remembered approvals.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(model.approvalRecords) { approval in
+                            ApprovalRecordRow(approval: approval) {
+                                model.revokeApproval(approval)
+                            }
+                        }
+                    }
+                }
+
+                HStack {
+                    Button {
+                        model.refreshApprovals()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+
+                    if !model.approvalRecords.isEmpty {
+                        Button(role: .destructive) {
+                            confirmRevokeAllApprovals()
+                        } label: {
+                            Label("Revoke All", systemImage: "trash")
+                        }
+                    }
+                }
+
+                if !model.approvalActionStatus.isEmpty {
+                    Text(model.approvalActionStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func confirmRevokeAllApprovals() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Revoke All Remembered Approvals?"
+        alert.informativeText = "Roca will ask again the next time one of these approvals is needed."
+        alert.addButton(withTitle: "Revoke All")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+        model.revokeAllApprovals()
+    }
+}
+
+private struct ApprovalRecordRow: View {
+    var approval: ApprovalRecord
+    var revoke: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: approval.category.systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(approval.title)
+                        .fontWeight(.medium)
+                    Text(approval.category.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(approval.detail)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                Text(dateText)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(role: .destructive) {
+                revoke()
+            } label: {
+                Label("Revoke", systemImage: "trash")
+            }
+            .controlSize(.small)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var dateText: String {
+        if let lastUsedAt = approval.lastUsedAt {
+            return "Last used \(lastUsedAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return "Created \(approval.createdAt.formatted(date: .abbreviated, time: .shortened))"
+    }
+}
+
+private extension ApprovalCategory {
+    var systemImage: String {
+        switch self {
+        case .provider:
+            "network"
+        case .privacy:
+            "hand.raised"
+        case .memory:
+            "brain"
+        case .other:
+            "checkmark.shield"
         }
     }
 }

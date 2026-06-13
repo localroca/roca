@@ -22,7 +22,8 @@ Roca stores app data under:
 ~/Library/Application Support/Roca/
 ```
 
-Current subdirectories include settings, logs, and managed local model assets.
+Current subdirectories include settings, approvals, logs, and managed local
+model assets.
 Roca-managed speech/listening models are stored under:
 
 ```text
@@ -32,6 +33,9 @@ Roca-managed speech/listening models are stored under:
 Raw assistant transcript logging is disabled by default and can be enabled in
 Settings > Logs. When enabled, Roca writes local assistant chat messages to the
 logs directory. Settings > Logs can export or delete the local transcript file.
+
+Remembered approvals are stored locally and can be reviewed or revoked in
+Settings > Permissions.
 
 ## Provider Boundaries
 

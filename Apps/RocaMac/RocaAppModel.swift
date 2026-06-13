@@ -53,6 +53,8 @@ final class RocaAppModel: ObservableObject {
     @Published private(set) var companionWarmth: CompanionWarmth = .warm
     @Published private(set) var assistantSpeechMuted = false
     @Published private(set) var rawTranscriptLoggingEnabled = false
+    @Published private(set) var approvalRecords: [ApprovalRecord] = []
+    @Published private(set) var approvalActionStatus = ""
     @Published private(set) var hasChatTranscriptLog = false
     @Published private(set) var chatTranscriptLogSummary = "No raw transcript log yet"
     @Published private(set) var chatTranscriptLogActionStatus = ""
@@ -70,6 +72,7 @@ final class RocaAppModel: ObservableObject {
     private let currentDictationSettings = CurrentDictationSettingsStore(settings: .phaseOneDefault)
     private let kokoroAssetStore: ProviderAssetStore
     private let moonshineModelStore: MoonshineModelStore
+    private let approvalStore: JSONApprovalStore
     private let assistantMetricsLogStore: AssistantTurnMetricsLogStore
     private let chatTranscriptLogStore: ChatTranscriptLogStore
     private let chatTranscriptLogger = Logger(subsystem: "Roca", category: "ChatTranscript")
@@ -111,6 +114,7 @@ final class RocaAppModel: ObservableObject {
             self.settingsStore = JSONSettingsStore.phaseOneDefault(paths: paths)
             self.kokoroAssetStore = ProviderAssetStore(rootDirectory: paths.modelsDirectory)
             self.moonshineModelStore = MoonshineModelStore(rootDirectory: paths.modelsDirectory)
+            self.approvalStore = JSONApprovalStore.phaseOneDefault(paths: paths)
             self.assistantMetricsLogStore = AssistantTurnMetricsLogStore(logsDirectory: paths.logsDirectory)
             self.chatTranscriptLogStore = ChatTranscriptLogStore(logsDirectory: paths.logsDirectory)
         } catch {
@@ -119,6 +123,7 @@ final class RocaAppModel: ObservableObject {
             self.settingsStore = JSONSettingsStore.phaseOneDefault(paths: fallback)
             self.kokoroAssetStore = ProviderAssetStore(rootDirectory: fallback.modelsDirectory)
             self.moonshineModelStore = MoonshineModelStore(rootDirectory: fallback.modelsDirectory)
+            self.approvalStore = JSONApprovalStore.phaseOneDefault(paths: fallback)
             self.assistantMetricsLogStore = AssistantTurnMetricsLogStore(logsDirectory: fallback.logsDirectory)
             self.chatTranscriptLogStore = ChatTranscriptLogStore(logsDirectory: fallback.logsDirectory)
             self.statusText = "Storage unavailable."
@@ -138,6 +143,7 @@ final class RocaAppModel: ObservableObject {
         } catch {
             statusText = "Settings unavailable."
         }
+        await loadApprovalRecords()
 
         configureSpeechPipeline()
         configureDictationPipeline()
@@ -325,6 +331,7 @@ final class RocaAppModel: ObservableObject {
         refreshAccessibilityStatus()
         refreshMicrophoneStatus()
         refreshSpeechRecognitionStatus()
+        refreshApprovals()
         refreshChatTranscriptLogInfo()
         Task {
             await refreshKokoroAssetStatus()
@@ -480,6 +487,38 @@ final class RocaAppModel: ObservableObject {
             await MainActor.run {
                 self.applySpeechRecognitionStatus(status)
                 self.statusText = allowed ? "Speech recognition ready" : "Speech recognition permission needed"
+            }
+        }
+    }
+
+    func refreshApprovals() {
+        Task {
+            await loadApprovalRecords()
+        }
+    }
+
+    func revokeApproval(_ approval: ApprovalRecord) {
+        Task {
+            do {
+                try await approvalStore.revoke(approval.id)
+                await loadApprovalRecords()
+                approvalActionStatus = "Revoked \(approval.title)."
+            } catch {
+                approvalActionStatus = error.localizedDescription
+                statusText = error.localizedDescription
+            }
+        }
+    }
+
+    func revokeAllApprovals() {
+        Task {
+            do {
+                try await approvalStore.revokeAll()
+                await loadApprovalRecords()
+                approvalActionStatus = "Revoked all remembered approvals."
+            } catch {
+                approvalActionStatus = error.localizedDescription
+                statusText = error.localizedDescription
             }
         }
     }
@@ -960,6 +999,31 @@ final class RocaAppModel: ObservableObject {
 
     var modelsDirectoryPath: String {
         paths.modelsDirectory.path
+    }
+
+    private func loadApprovalRecords() async {
+        do {
+            approvalRecords = Self.sortedApprovalRecords(try await approvalStore.load())
+            approvalActionStatus = ""
+        } catch {
+            approvalRecords = []
+            approvalActionStatus = error.localizedDescription
+            statusText = error.localizedDescription
+        }
+    }
+
+    private static func sortedApprovalRecords(_ approvals: [ApprovalRecord]) -> [ApprovalRecord] {
+        approvals.sorted {
+            let lhsDate = $0.lastUsedAt ?? $0.createdAt
+            let rhsDate = $1.lastUsedAt ?? $1.createdAt
+            if lhsDate != rhsDate {
+                return lhsDate > rhsDate
+            }
+            if $0.title != $1.title {
+                return $0.title < $1.title
+            }
+            return $0.id.rawValue < $1.id.rawValue
+        }
     }
 
     private func applyChatTranscriptLogInfo(_ info: ChatTranscriptLogFileInfo) {

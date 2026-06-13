@@ -4,12 +4,14 @@ import RocaCore
 public struct ApplicationSupportPaths: Sendable {
     public var root: URL
     public var settingsDirectory: URL
+    public var approvalsDirectory: URL
     public var logsDirectory: URL
     public var modelsDirectory: URL
 
     public init(root: URL) {
         self.root = root
         self.settingsDirectory = root.appendingPathComponent("Settings", isDirectory: true)
+        self.approvalsDirectory = root.appendingPathComponent("Approvals", isDirectory: true)
         self.logsDirectory = root.appendingPathComponent("Logs", isDirectory: true)
         self.modelsDirectory = root.appendingPathComponent("Models", isDirectory: true)
     }
@@ -24,6 +26,7 @@ public struct ApplicationSupportPaths: Sendable {
     public func createDirectories(fileManager: FileManager = .default) throws {
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: settingsDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: approvalsDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
     }
