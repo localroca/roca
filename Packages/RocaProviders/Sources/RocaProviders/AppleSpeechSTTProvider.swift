@@ -40,6 +40,7 @@ public final class AppleSpeechSTTProvider: STTProvider, @unchecked Sendable {
             let speechRequest = SFSpeechAudioBufferRecognitionRequest()
             speechRequest.requiresOnDeviceRecognition = true
             speechRequest.shouldReportPartialResults = true
+            speechRequest.contextualStrings = Self.contextualStrings(for: request.intent)
             if #available(macOS 13.0, *) {
                 speechRequest.addsPunctuation = true
             }
@@ -151,6 +152,15 @@ public final class AppleSpeechSTTProvider: STTProvider, @unchecked Sendable {
             if activeSession === session {
                 activeSession = nil
             }
+        }
+    }
+
+    static func contextualStrings(for intent: VoiceInputIntent) -> [String] {
+        switch intent {
+        case .assistantPrompt, .command:
+            ["Roca", "Codex"]
+        case .dictation:
+            []
         }
     }
 

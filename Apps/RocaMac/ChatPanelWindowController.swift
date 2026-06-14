@@ -129,7 +129,9 @@ private struct ChatPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(model.chatMessages) { message in
-                        ChatMessageRow(message: message)
+                        ChatMessageRow(message: message) { messageID, decision in
+                            model.respondToAgentApproval(messageID: messageID, decision: decision)
+                        }
                             .id(message.id)
                     }
                 }
@@ -210,6 +212,7 @@ private struct ChatPanelView: View {
 
 private struct ChatMessageRow: View {
     var message: ChatMessage
+    var onApprovalDecision: (ChatMessageID, AgentApprovalDecision) -> Void
 
     var body: some View {
         switch message.role {
@@ -277,11 +280,23 @@ private struct ChatMessageRow: View {
     @ViewBuilder
     private var messageBody: some View {
         let text = message.text.isEmpty ? "..." : message.text
-        Text(text)
-            .font(.body)
-            .foregroundStyle(message.role == .user ? Color.white : Color.primary)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(text)
+                .font(.body)
+                .foregroundStyle(message.role == .user ? Color.white : Color.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let approval = message.approvalRequest {
+                ApprovalPromptView(
+                    approval: approval,
+                    isPending: message.status == .pending && approval.decision == nil,
+                    onDecision: { decision in
+                        onApprovalDecision(message.id, decision)
+                    }
+                )
+            }
+        }
     }
 
     private var title: String {
@@ -346,6 +361,92 @@ private struct ChatMessageRow: View {
             .secondary.opacity(0.22)
         case .completed:
             .secondary.opacity(message.role == .user ? 0 : 0.16)
+        }
+    }
+}
+
+private struct ApprovalPromptView: View {
+    var approval: ChatApprovalRequest
+    var isPending: Bool
+    var onDecision: (AgentApprovalDecision) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(approval.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if isPending {
+                HStack(spacing: 8) {
+                    Button {
+                        onDecision(.approve)
+                    } label: {
+                        Label("Approve Once", systemImage: "checkmark.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .help("Approve this request once")
+
+                    Button {
+                        onDecision(.approveForSession)
+                    } label: {
+                        Label("Always Approve", systemImage: "checkmark.seal")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Remember this approval")
+
+                    Button(role: .destructive) {
+                        onDecision(.deny)
+                    } label: {
+                        Label("Deny", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Deny this request")
+                }
+            } else if let decision = approval.decision {
+                Label(resolvedText(for: decision), systemImage: resolvedIcon(for: decision))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(resolvedColor(for: decision))
+            }
+        }
+    }
+
+    private func resolvedText(for decision: AgentApprovalDecision) -> String {
+        switch decision {
+        case .approve:
+            "Approved once"
+        case .approveForSession:
+            "Remembered approval"
+        case .deny:
+            "Denied"
+        case .cancel:
+            "Cancelled"
+        }
+    }
+
+    private func resolvedIcon(for decision: AgentApprovalDecision) -> String {
+        switch decision {
+        case .approve, .approveForSession:
+            "checkmark.circle.fill"
+        case .deny:
+            "xmark.circle.fill"
+        case .cancel:
+            "minus.circle.fill"
+        }
+    }
+
+    private func resolvedColor(for decision: AgentApprovalDecision) -> Color {
+        switch decision {
+        case .approve, .approveForSession:
+            .green
+        case .deny:
+            .red
+        case .cancel:
+            .secondary
         }
     }
 }

@@ -23,6 +23,24 @@ func assistantDirectiveEnvelopeValidatesSupportedActions() throws {
     #expect(try AssistantDirectiveEnvelope(type: .readSelection).directive() == .readSelection)
 
     #expect(
+        try AssistantDirectiveEnvelope(
+            type: .runAgent,
+            providerID: "codex-agent",
+            projectName: "uni-auth",
+            prompt: "what passkey endpoints exist?",
+            mode: .ask
+        ).directive()
+            == .runAgent(
+                AgentDirectiveRequest(
+                    providerID: ProviderID(rawValue: "codex-agent"),
+                    projectName: "uni-auth",
+                    prompt: "what passkey endpoints exist?",
+                    mode: .ask
+                )
+            )
+    )
+
+    #expect(
         try AssistantDirectiveEnvelope(type: .unsupported, message: "Not yet.").directive()
             == .unsupported("Not yet.")
     )
@@ -40,5 +58,13 @@ func assistantDirectiveEnvelopeRejectsMissingRequiredFields() throws {
 
     #expect(throws: RocaError.selectionUnavailable("Insert text directive needs text.")) {
         _ = try AssistantDirectiveEnvelope(type: .insertText, text: " ").directive()
+    }
+
+    #expect(throws: RocaError.selectionUnavailable("Agent directive needs a prompt.")) {
+        _ = try AssistantDirectiveEnvelope(type: .runAgent, providerID: "codex-agent").directive()
+    }
+
+    #expect(throws: RocaError.selectionUnavailable("Agent directive needs a provider.")) {
+        _ = try AssistantDirectiveEnvelope(type: .runAgent, prompt: "inspect this").directive()
     }
 }

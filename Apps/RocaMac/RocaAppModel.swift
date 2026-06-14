@@ -53,11 +53,15 @@ final class RocaAppModel: ObservableObject {
     @Published private(set) var companionWarmth: CompanionWarmth = .warm
     @Published private(set) var assistantSpeechMuted = false
     @Published private(set) var rawTranscriptLoggingEnabled = false
+    @Published private(set) var assistantDiagnosticsLoggingEnabled = false
     @Published private(set) var approvalRecords: [ApprovalRecord] = []
     @Published private(set) var approvalActionStatus = ""
     @Published private(set) var hasChatTranscriptLog = false
     @Published private(set) var chatTranscriptLogSummary = "No raw transcript log yet"
     @Published private(set) var chatTranscriptLogActionStatus = ""
+    @Published private(set) var hasAssistantDiagnosticsLog = false
+    @Published private(set) var assistantDiagnosticsLogSummary = "No diagnostics log yet"
+    @Published private(set) var assistantDiagnosticsLogActionStatus = ""
     @Published private(set) var companionActivity: RocaActivity = .idle
     @Published private(set) var companionMessage = "Ready"
 
@@ -73,9 +77,12 @@ final class RocaAppModel: ObservableObject {
     private let kokoroAssetStore: ProviderAssetStore
     private let moonshineModelStore: MoonshineModelStore
     private let approvalStore: JSONApprovalStore
+    private let projectStore: JSONProjectIdentityStore
     private let assistantMetricsLogStore: AssistantTurnMetricsLogStore
     private let chatTranscriptLogStore: ChatTranscriptLogStore
+    private let assistantDiagnosticsLogStore: AssistantDiagnosticsLogStore
     private let chatTranscriptLogger = Logger(subsystem: "Roca", category: "ChatTranscript")
+    private let assistantDiagnosticsLogger = Logger(subsystem: "Roca", category: "AssistantDiagnostics")
 
     private var settings: RocaSettings = .phaseOneDefault
     private var ttsProviders: [ProviderID: any TTSProvider] = [:]
@@ -93,6 +100,7 @@ final class RocaAppModel: ObservableObject {
     private var assistantStateTask: Task<Void, Never>?
     private var assistantMessageTask: Task<Void, Never>?
     private var assistantMetricsTask: Task<Void, Never>?
+    private var assistantDiagnosticsTask: Task<Void, Never>?
     private var kokoroInstallTask: Task<Void, Never>?
     private var kokoroWarmupTask: Task<Void, Never>?
     private var moonshineInstallTask: Task<Void, Never>?
@@ -115,8 +123,10 @@ final class RocaAppModel: ObservableObject {
             self.kokoroAssetStore = ProviderAssetStore(rootDirectory: paths.modelsDirectory)
             self.moonshineModelStore = MoonshineModelStore(rootDirectory: paths.modelsDirectory)
             self.approvalStore = JSONApprovalStore.phaseOneDefault(paths: paths)
+            self.projectStore = JSONProjectIdentityStore.phaseOneDefault(paths: paths)
             self.assistantMetricsLogStore = AssistantTurnMetricsLogStore(logsDirectory: paths.logsDirectory)
             self.chatTranscriptLogStore = ChatTranscriptLogStore(logsDirectory: paths.logsDirectory)
+            self.assistantDiagnosticsLogStore = AssistantDiagnosticsLogStore(logsDirectory: paths.logsDirectory)
         } catch {
             let fallback = ApplicationSupportPaths(root: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Roca"))
             self.paths = fallback
@@ -124,8 +134,10 @@ final class RocaAppModel: ObservableObject {
             self.kokoroAssetStore = ProviderAssetStore(rootDirectory: fallback.modelsDirectory)
             self.moonshineModelStore = MoonshineModelStore(rootDirectory: fallback.modelsDirectory)
             self.approvalStore = JSONApprovalStore.phaseOneDefault(paths: fallback)
+            self.projectStore = JSONProjectIdentityStore.phaseOneDefault(paths: fallback)
             self.assistantMetricsLogStore = AssistantTurnMetricsLogStore(logsDirectory: fallback.logsDirectory)
             self.chatTranscriptLogStore = ChatTranscriptLogStore(logsDirectory: fallback.logsDirectory)
+            self.assistantDiagnosticsLogStore = AssistantDiagnosticsLogStore(logsDirectory: fallback.logsDirectory)
             self.statusText = "Storage unavailable."
         }
 
@@ -155,6 +167,7 @@ final class RocaAppModel: ObservableObject {
         observeAssistantState()
         observeAssistantMessages()
         observeAssistantTurnMetrics()
+        observeAssistantDiagnostics()
         refreshSettingsWindowState()
         await refreshKokoroAssetStatus()
         await refreshMoonshineModelStatus()
@@ -257,6 +270,15 @@ final class RocaAppModel: ObservableObject {
         persistSettings()
     }
 
+    func setAssistantDiagnosticsLoggingEnabled(_ enabled: Bool) {
+        guard settings.assistantDiagnosticsLoggingEnabled != enabled else {
+            return
+        }
+        settings.assistantDiagnosticsLoggingEnabled = enabled
+        updatePublishedSettings()
+        persistSettings()
+    }
+
     func refreshChatTranscriptLogInfo() {
         Task { [weak self] in
             guard let self else {
@@ -319,6 +341,67 @@ final class RocaAppModel: ObservableObject {
         }
     }
 
+    func refreshAssistantDiagnosticsLogInfo() {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                let info = try await assistantDiagnosticsLogStore.fileInfo()
+                await MainActor.run {
+                    self.applyAssistantDiagnosticsLogInfo(info)
+                }
+            } catch {
+                await MainActor.run {
+                    self.hasAssistantDiagnosticsLog = false
+                    self.assistantDiagnosticsLogSummary = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func exportAssistantDiagnosticsLog(to destinationURL: URL) {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await assistantDiagnosticsLogStore.export(to: destinationURL)
+                let info = try await assistantDiagnosticsLogStore.fileInfo()
+                await MainActor.run {
+                    self.assistantDiagnosticsLogActionStatus = "Exported diagnostics log."
+                    self.applyAssistantDiagnosticsLogInfo(info)
+                }
+            } catch {
+                await MainActor.run {
+                    self.assistantDiagnosticsLogActionStatus = error.localizedDescription
+                    self.statusText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func deleteAssistantDiagnosticsLog() {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await assistantDiagnosticsLogStore.delete()
+                let info = try await assistantDiagnosticsLogStore.fileInfo()
+                await MainActor.run {
+                    self.assistantDiagnosticsLogActionStatus = "Deleted diagnostics log."
+                    self.applyAssistantDiagnosticsLogInfo(info)
+                }
+            } catch {
+                await MainActor.run {
+                    self.assistantDiagnosticsLogActionStatus = error.localizedDescription
+                    self.statusText = error.localizedDescription
+                }
+            }
+        }
+    }
+
     func setChatPanelPresenter(_ presenter: @escaping @MainActor () -> Void) {
         chatPanelPresenter = presenter
     }
@@ -333,6 +416,7 @@ final class RocaAppModel: ObservableObject {
         refreshSpeechRecognitionStatus()
         refreshApprovals()
         refreshChatTranscriptLogInfo()
+        refreshAssistantDiagnosticsLogInfo()
         Task {
             await refreshKokoroAssetStatus()
             await loadVoices(for: activeSettingsVoiceProviderID)
@@ -550,9 +634,9 @@ final class RocaAppModel: ObservableObject {
     }
 
     func toggleAssistant() {
-        if isAssistantActive || isAssistantTurnActive {
+        if isAssistantActive {
             stopAssistant()
-        } else if assistantTask != nil {
+        } else if isAssistantTurnActive || assistantTask != nil {
             cancelAssistant()
         } else {
             startAssistant()
@@ -631,9 +715,9 @@ final class RocaAppModel: ObservableObject {
     }
 
     func sendChatMessage(_ text: String) {
-        guard assistantTask == nil else {
+        guard assistantTask == nil, !isAssistantActive, !isAssistantTurnActive else {
             Task {
-                await assistantSession?.postStatus("Finish the current turn first.", status: .failed)
+                await assistantSession?.postStatus("Still finishing the current turn. Try again in a moment.", status: .failed)
             }
             return
         }
@@ -690,6 +774,12 @@ final class RocaAppModel: ObservableObject {
             await MainActor.run {
                 self.assistantTask = nil
             }
+        }
+    }
+
+    func respondToAgentApproval(messageID: ChatMessageID, decision: AgentApprovalDecision) {
+        Task {
+            await assistantSession?.submitAgentApprovalDecision(messageID, decision: decision)
         }
     }
 
@@ -997,6 +1087,10 @@ final class RocaAppModel: ObservableObject {
         chatTranscriptLogStore.fileURL.path
     }
 
+    var assistantDiagnosticsLogPath: String {
+        assistantDiagnosticsLogStore.fileURL.path
+    }
+
     var modelsDirectoryPath: String {
         paths.modelsDirectory.path
     }
@@ -1044,6 +1138,27 @@ final class RocaAppModel: ObservableObject {
             chatTranscriptLogSummary = "\(rowLabel), \(byteText), updated \(modifiedText)"
         } else {
             chatTranscriptLogSummary = "\(rowLabel), \(byteText)"
+        }
+    }
+
+    private func applyAssistantDiagnosticsLogInfo(_ info: AssistantDiagnosticsLogFileInfo) {
+        hasAssistantDiagnosticsLog = info.exists
+        guard info.exists else {
+            assistantDiagnosticsLogSummary = "No diagnostics log yet"
+            return
+        }
+
+        let rowLabel = info.rowCount == 1 ? "1 row" : "\(info.rowCount) rows"
+        let byteText = Self.fileByteFormatter.string(fromByteCount: info.byteCount)
+        if let modifiedAt = info.modifiedAt {
+            let modifiedText = DateFormatter.localizedString(
+                from: modifiedAt,
+                dateStyle: .medium,
+                timeStyle: .short
+            )
+            assistantDiagnosticsLogSummary = "\(rowLabel), \(byteText), updated \(modifiedText)"
+        } else {
+            assistantDiagnosticsLogSummary = "\(rowLabel), \(byteText)"
         }
     }
 
@@ -1595,11 +1710,40 @@ final class RocaAppModel: ObservableObject {
 
     private func configureAssistantPipeline() {
         let ollamaProvider = OllamaBrainProvider()
+        let agentApprovalGate = InteractiveAgentApprovalGate(
+            store: approvalStore,
+            presenter: { [weak self] prompt in
+                guard let session = await MainActor.run(body: { () -> DefaultAssistantSessionOrchestrator? in
+                    self?.showChatPanel()
+                    return self?.assistantSession
+                }) else {
+                    return .cancel
+                }
+                return await session.requestAgentApprovalDecision(for: prompt)
+            },
+            onApprovalsChanged: { [weak self] in
+                await MainActor.run {
+                    self?.refreshApprovals()
+                }
+            }
+        )
+        let codexProvider = CodexAgentProvider(
+            client: CodexAppServerClient(
+                approvalDecisioner: agentApprovalGate,
+                diagnosticSink: { [weak self] event in
+                    await MainActor.run {
+                        self?.recordAssistantDiagnosticEvent(event)
+                    }
+                }
+            ),
+            approvalAuthorizer: agentApprovalGate
+        )
         let resolver = DefaultProviderResolver(
             registry: registry,
             ttsProviders: Array(ttsProviders.values),
             sttProviders: Array(sttProviders.values),
             brainProviders: [ollamaProvider],
+            agentProviders: [codexProvider],
             selectedTTSProvider: { [currentSpeechSettings] in
                 currentSpeechSettings.selectedTTSProvider()
             },
@@ -1626,6 +1770,7 @@ final class RocaAppModel: ObservableObject {
                 playback: playback,
                 companionState: companionState
             ),
+            projectCatalog: projectStore,
             readSelectionCommand: readSelectionCommand,
             companionState: companionState,
             stopSpeech: { [weak self] in
@@ -1681,6 +1826,7 @@ final class RocaAppModel: ObservableObject {
         companionWarmth = settings.companionWarmth
         assistantSpeechMuted = settings.assistantSpeechMuted
         rawTranscriptLoggingEnabled = settings.rawTranscriptLoggingEnabled
+        assistantDiagnosticsLoggingEnabled = settings.assistantDiagnosticsLoggingEnabled
     }
 
     private func updatePublishedAssistantBrainSelection() {
@@ -2180,6 +2326,21 @@ final class RocaAppModel: ObservableObject {
         }
     }
 
+    private func observeAssistantDiagnostics() {
+        assistantDiagnosticsTask?.cancel()
+        guard let assistantSession else {
+            return
+        }
+
+        assistantDiagnosticsTask = Task { [weak self, assistantSession] in
+            for await event in assistantSession.diagnosticUpdates {
+                await MainActor.run {
+                    self?.recordAssistantDiagnosticEvent(event)
+                }
+            }
+        }
+    }
+
     private func recordAssistantTurnMetrics(_ metrics: AssistantTurnMetrics) {
         assistantTurnMetrics.insert(metrics, at: 0)
         if assistantTurnMetrics.count > 20 {
@@ -2189,6 +2350,28 @@ final class RocaAppModel: ObservableObject {
         let logStore = assistantMetricsLogStore
         Task {
             try? await logStore.append(metrics)
+        }
+    }
+
+    private func recordAssistantDiagnosticEvent(_ event: AssistantDiagnosticEvent) {
+        guard settings.assistantDiagnosticsLoggingEnabled else {
+            return
+        }
+
+        let logStore = assistantDiagnosticsLogStore
+        Task { [weak self, logStore] in
+            do {
+                try await logStore.append(event)
+                await MainActor.run {
+                    self?.refreshAssistantDiagnosticsLogInfo()
+                }
+            } catch {
+                await MainActor.run {
+                    self?.assistantDiagnosticsLogger.error(
+                        "Failed to append assistant diagnostic \(event.id, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
         }
     }
 

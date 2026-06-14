@@ -28,6 +28,8 @@ public actor DefaultAssistantSessionOrchestrator {
     private let speechOrchestrator: any SpeechOrchestrating
     private let applicationCommands: any ApplicationCommandExecuting
     private let contextProvider: any AssistantContextProviding
+    private let projectCatalog: (any ProjectIdentityCatalog)?
+    private let projectWriter: (any ProjectIdentityWriting)?
     private let readSelectionCommand: ReadSelectionCommand?
     private let companionState: CompanionStateCenter?
     private let stopSpeech: StopSpeechHandler
@@ -45,11 +47,15 @@ public actor DefaultAssistantSessionOrchestrator {
     private var activeTurnID: BrainRequestID?
     private var activeBrainProvider: (any BrainProvider)?
     private var activeBrainRequestID: BrainRequestID?
+    private var activeAgentProvider: (any AgentProvider)?
+    private var activeAgentRunID: AgentRunID?
     private var cancelledTurnIDs: Set<BrainRequestID> = []
     private var conversationMessages: [BrainMessage] = []
     private var stateContinuations: [UUID: AsyncStream<AssistantState>.Continuation] = [:]
     private var messageContinuations: [UUID: AsyncStream<[ChatMessage]>.Continuation] = [:]
     private var metricsContinuations: [UUID: AsyncStream<AssistantTurnMetrics>.Continuation] = [:]
+    private var diagnosticsContinuations: [UUID: AsyncStream<AssistantDiagnosticEvent>.Continuation] = [:]
+    private var approvalContinuations: [ChatMessageID: CheckedContinuation<AgentApprovalDecision, Never>] = [:]
 
     public nonisolated var stateUpdates: AsyncStream<AssistantState> {
         AsyncStream { continuation in
@@ -93,6 +99,20 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
+    public nonisolated var diagnosticUpdates: AsyncStream<AssistantDiagnosticEvent> {
+        AsyncStream { continuation in
+            let id = UUID()
+            Task {
+                await self.addDiagnosticsContinuation(continuation, id: id)
+            }
+            continuation.onTermination = { _ in
+                Task {
+                    await self.removeDiagnosticsContinuation(id)
+                }
+            }
+        }
+    }
+
     public var state: AssistantState {
         currentState
     }
@@ -109,6 +129,8 @@ public actor DefaultAssistantSessionOrchestrator {
         speechOrchestrator: any SpeechOrchestrating,
         applicationCommands: any ApplicationCommandExecuting = DefaultApplicationCommandExecutor(),
         contextProvider: any AssistantContextProviding = DefaultAssistantContextProvider(),
+        projectCatalog: (any ProjectIdentityCatalog)? = nil,
+        projectWriter: (any ProjectIdentityWriting)? = nil,
         readSelectionCommand: ReadSelectionCommand? = nil,
         companionState: CompanionStateCenter? = nil,
         stopSpeech: @escaping StopSpeechHandler
@@ -120,6 +142,8 @@ public actor DefaultAssistantSessionOrchestrator {
         self.speechOrchestrator = speechOrchestrator
         self.applicationCommands = applicationCommands
         self.contextProvider = contextProvider
+        self.projectCatalog = projectCatalog
+        self.projectWriter = projectWriter ?? (projectCatalog as? any ProjectIdentityWriting)
         self.readSelectionCommand = readSelectionCommand
         self.companionState = companionState
         self.stopSpeech = stopSpeech
@@ -131,7 +155,13 @@ public actor DefaultAssistantSessionOrchestrator {
             return
         }
         guard activeSession == nil, activeTurnID == nil else {
-            appendStatus("Finish the current turn first.", status: .failed, request: request)
+            emitDiagnostic(
+                kind: .turnBlocked,
+                turnID: request.turnID,
+                phase: "submit",
+                metadata: diagnosticMetadata(for: request)
+            )
+            appendStatus("Still finishing the current turn. Try again in a moment.", status: .failed, request: request)
             return
         }
 
@@ -218,8 +248,7 @@ public actor DefaultAssistantSessionOrchestrator {
 
     public func stopVoice() async {
         guard let session = activeSession else {
-            await cancelActiveBrainAndSpeech()
-            setState(.stopped)
+            await cancel()
             return
         }
         var timing = session.timing
@@ -257,7 +286,7 @@ public actor DefaultAssistantSessionOrchestrator {
     public func cancel() async {
         if let session = activeSession {
             activeSession = nil
-            cancelledTurnIDs.insert(session.request.turnID)
+            recordTurnCancellation(session.request.turnID)
             var timing = session.timing
             timing.stopRequestedAt = timing.stopRequestedAt ?? Date()
             session.transcriptTask.cancel()
@@ -268,8 +297,7 @@ public actor DefaultAssistantSessionOrchestrator {
             emitMetrics(timing.snapshot(outcome: .cancelled))
         }
         if let activeTurnID {
-            cancelledTurnIDs.insert(activeTurnID)
-            markTurnMessages(activeTurnID, status: .cancelled)
+            recordTurnCancellation(activeTurnID)
         }
         await cancelActiveBrainAndSpeech()
         setState(.stopped)
@@ -293,6 +321,37 @@ public actor DefaultAssistantSessionOrchestrator {
         appendStatus(text, status: status)
     }
 
+    public func requestAgentApprovalDecision(for prompt: AgentApprovalPrompt) async -> AgentApprovalDecision {
+        let messageID = appendAgentApprovalMessage(prompt)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                approvalContinuations[messageID] = continuation
+            }
+        } onCancel: {
+            Task {
+                await self.submitAgentApprovalDecision(messageID, decision: .cancel)
+            }
+        }
+    }
+
+    public func submitAgentApprovalDecision(_ messageID: ChatMessageID, decision: AgentApprovalDecision) {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }),
+              var approval = messages[index].approvalRequest,
+              approval.decision == nil
+        else {
+            return
+        }
+
+        approval.decision = decision
+        approval.decidedAt = Date()
+        messages[index].approvalRequest = approval
+        messages[index].text = Self.agentApprovalDecisionText(decision)
+        messages[index].status = Self.agentApprovalMessageStatus(decision)
+        publishMessages()
+
+        approvalContinuations.removeValue(forKey: messageID)?.resume(returning: decision)
+    }
+
     private func runAssistantTurn(
         input: String,
         request: AssistantSessionTurnRequest,
@@ -302,12 +361,20 @@ public actor DefaultAssistantSessionOrchestrator {
         activeTurnID = request.turnID
         cancelledTurnIDs.remove(request.turnID)
         appendUserMessage(input, request: request)
+        emitDiagnostic(
+            kind: .turnStarted,
+            turnID: request.turnID,
+            phase: "start",
+            metadata: diagnosticMetadata(for: request)
+        )
         defer {
             if activeTurnID == request.turnID {
                 activeTurnID = nil
             }
             activeBrainProvider = nil
             activeBrainRequestID = nil
+            activeAgentProvider = nil
+            activeAgentRunID = nil
             cancelledTurnIDs.remove(request.turnID)
         }
 
@@ -328,7 +395,15 @@ public actor DefaultAssistantSessionOrchestrator {
             )
             timing.directiveFinishedAt = Date()
             timing.directiveType = directive.metricType
+            emitDiagnostic(
+                kind: .directiveResolved,
+                turnID: request.turnID,
+                phase: "routing",
+                directiveType: directive.metricType,
+                metadata: diagnosticMetadata(for: request)
+            )
             try Task.checkCancellation()
+            try checkTurnStillActive(request.turnID)
             try await handleDirective(
                 directive,
                 input: input,
@@ -337,12 +412,30 @@ public actor DefaultAssistantSessionOrchestrator {
                 provider: brainProvider,
                 timing: &timing
             )
+            try Task.checkCancellation()
+            try checkTurnStillActive(request.turnID)
+            emitDiagnostic(
+                kind: .turnCompleted,
+                turnID: request.turnID,
+                phase: "finish",
+                directiveType: timing.directiveType,
+                outcome: AssistantTurnOutcome.completed.rawValue,
+                metadata: diagnosticMetadata(for: request)
+            )
             emitMetrics(timing.snapshot(outcome: .completed))
         } catch {
             if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
                 setState(.stopped)
                 await emit(.interrupted, message: "Assistant cancelled.", correlationID: request.turnID.rawValue)
                 markTurnMessages(request.turnID, status: .cancelled)
+                emitDiagnostic(
+                    kind: .turnCancelled,
+                    turnID: request.turnID,
+                    phase: "cancel",
+                    directiveType: timing.directiveType,
+                    outcome: AssistantTurnOutcome.cancelled.rawValue,
+                    metadata: diagnosticMetadata(for: request)
+                )
                 emitMetrics(timing.snapshot(outcome: .cancelled))
                 return
             }
@@ -353,6 +446,14 @@ public actor DefaultAssistantSessionOrchestrator {
             appendStatus(message, status: .failed, request: request)
             setState(.failed(message))
             await emit(.offline(reason: message), message: message, correlationID: request.turnID.rawValue)
+            emitDiagnostic(
+                kind: .turnFailed,
+                turnID: request.turnID,
+                phase: String(describing: failurePhase),
+                directiveType: timing.directiveType,
+                outcome: AssistantTurnOutcome.failed.rawValue,
+                metadata: diagnosticMetadata(for: request, error: error)
+            )
             if recoveryMessage != nil, request.outputMode != .textOnly {
                 try? await speak(message, request: request, timing: &timing, force: true)
             }
@@ -368,13 +469,7 @@ public actor DefaultAssistantSessionOrchestrator {
     ) async throws -> AssistantDirective {
         let brainRequest = BrainRequest(
             requestID: request.turnID,
-            messages: [
-                BrainMessage(role: .system, content: AssistantPromptCatalog.directiveSystemPrompt),
-                BrainMessage(
-                    role: .user,
-                    content: AssistantPromptCatalog.directiveUserPrompt(input: input, context: context)
-                )
-            ],
+            messages: directiveMessages(input: input, context: context),
             role: .companionRouter,
             modelID: request.selection(for: .companionRouter).modelID,
             context: RequestContext(
@@ -390,6 +485,18 @@ public actor DefaultAssistantSessionOrchestrator {
         return try AssistantPromptCatalog.parseDirective(response)
     }
 
+    private func directiveMessages(input: String, context: AssistantLocalContext) -> [BrainMessage] {
+        var messages = [BrainMessage(role: .system, content: AssistantPromptCatalog.directiveSystemPrompt)]
+        messages.append(contentsOf: conversationMessages)
+        messages.append(
+            BrainMessage(
+                role: .user,
+                content: AssistantPromptCatalog.directiveUserPrompt(input: input, context: context)
+            )
+        )
+        return messages
+    }
+
     private func handleDirective(
         _ directive: AssistantDirective,
         input: String,
@@ -398,6 +505,7 @@ public actor DefaultAssistantSessionOrchestrator {
         provider: any BrainProvider,
         timing: inout AssistantTurnTimingBuilder
     ) async throws {
+        try checkTurnStillActive(request.turnID)
         switch directive {
         case .respond:
             timing.responseBrainStartedAt = Date()
@@ -416,6 +524,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 messageID: assistantMessageID
             )
             timing.responseBrainFinishedAt = Date()
+            try checkTurnStillActive(request.turnID)
             completeMessage(
                 assistantMessageID,
                 text: response.bubbleText,
@@ -430,6 +539,7 @@ public actor DefaultAssistantSessionOrchestrator {
             timing.actionStartedAt = Date()
             let result = await applicationCommands.execute(.open(target))
             timing.actionFinishedAt = Date()
+            try checkTurnStillActive(request.turnID)
             completeMessage(actionID, text: result.spokenSummary, status: .completed)
             try await speak(result.spokenSummary, request: request, timing: &timing, force: request.inputMode == .voice)
         case .quitApplication(let target):
@@ -438,6 +548,7 @@ public actor DefaultAssistantSessionOrchestrator {
             timing.actionStartedAt = Date()
             let result = await applicationCommands.execute(.quit(target))
             timing.actionFinishedAt = Date()
+            try checkTurnStillActive(request.turnID)
             completeMessage(actionID, text: result.spokenSummary, status: .completed)
             try await speak(result.spokenSummary, request: request, timing: &timing, force: request.inputMode == .voice)
         case .insertText(let text):
@@ -447,6 +558,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 timing.actionStartedAt = Date()
                 try await inserter.insertIntoFocusedApp(text)
                 timing.actionFinishedAt = Date()
+                try checkTurnStillActive(request.turnID)
             } catch {
                 timing.actionFinishedAt = Date()
                 if Self.isCancellation(error) {
@@ -471,6 +583,7 @@ public actor DefaultAssistantSessionOrchestrator {
             timing.actionStartedAt = Date()
             let result = try await readSelectionCommand.run()
             timing.actionFinishedAt = Date()
+            try checkTurnStillActive(request.turnID)
             let summary = Self.readSelectionSummary(for: result)
             completeMessage(actionID, text: summary.text, status: summary.status)
             if summary.status == .failed, request.inputMode == .voice {
@@ -478,11 +591,399 @@ public actor DefaultAssistantSessionOrchestrator {
             } else {
                 setState(.stopped)
             }
+        case .runAgent(let agentRequest):
+            try await handleAgentDirective(
+                agentRequest,
+                input: input,
+                request: request,
+                context: context,
+                brainProvider: provider,
+                timing: &timing
+            )
         case .unsupported(let message):
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: directive.metricType)
             completeMessage(id, text: message, status: .completed)
             try await speak(message, request: request, timing: &timing)
         }
+    }
+
+    private func handleAgentDirective(
+        _ directive: AgentDirectiveRequest,
+        input: String,
+        request: AssistantSessionTurnRequest,
+        context: AssistantLocalContext,
+        brainProvider: any BrainProvider,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws {
+        try checkTurnStillActive(request.turnID)
+        let providerName = directive.providerDisplayName
+        if directive.mode != .ask, directive.projectName == nil {
+            let message = "Which project should \(providerName) use?"
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            try await speak(message, request: request, timing: &timing)
+            return
+        }
+
+        guard let providerID = directive.resolvedProviderID else {
+            let message = "I don't know which agent provider to use yet."
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            try await speak(message, request: request, timing: &timing)
+            return
+        }
+
+        let provider: any AgentProvider
+        do {
+            provider = try await resolver.agentProvider(id: providerID)
+            try checkTurnStillActive(request.turnID)
+        } catch {
+            if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
+                throw RocaError.cancelled
+            }
+            let message = "I couldn't start \(providerName): \(error.localizedDescription)"
+            let id = appendAssistantMessage(message, status: .failed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .failed)
+            try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
+            return
+        }
+
+        let resolvedProject = try await resolveProject(
+            for: directive,
+            providerName: providerName,
+            provider: provider,
+            request: request,
+            timing: &timing
+        )
+        try Task.checkCancellation()
+        try checkTurnStillActive(request.turnID)
+        guard resolvedProject.shouldContinue else {
+            return
+        }
+
+        let intro = Self.agentIntroText(providerName: providerName, project: resolvedProject.project)
+        let introID = appendAssistantMessage(intro, status: .completed, request: request, directiveType: .runAgent)
+        completeMessage(introID, text: intro, status: .completed)
+
+        setState(.acting("Interacting with \(providerName)"))
+        let actionID = appendActionMessage("Interacting with \(providerName)...", status: .streaming, request: request, directiveType: .runAgent)
+        timing.actionStartedAt = Date()
+        do {
+            let runID = AgentRunID.make()
+            activeAgentProvider = provider
+            activeAgentRunID = runID
+            let agentRunRequest = AgentRunRequest(
+                runID: runID,
+                prompt: directive.prompt,
+                mode: directive.mode,
+                role: .coding,
+                workspacePath: resolvedProject.project?.localPath,
+                dataScopes: [.prompt],
+                actionScopes: [],
+                metadata: resolvedProject.project.map { ["projectID": $0.id.rawValue, "projectName": $0.displayName] } ?? [:]
+            )
+            emitDiagnostic(
+                kind: .agentRunStarted,
+                turnID: request.turnID,
+                phase: "agentRun",
+                providerID: providerID,
+                directiveType: .runAgent,
+                metadata: diagnosticMetadata(
+                    for: request,
+                    extra: [
+                        "agentMode": directive.mode.rawValue,
+                        "workspaceResolved": resolvedProject.project == nil ? "false" : "true"
+                    ]
+                )
+            )
+            let events = try await provider.start(agentRunRequest)
+            var accumulatedText = ""
+            var finalText: String?
+            var didFinish = false
+            var wasCancelled = false
+            for try await event in events {
+                try Task.checkCancellation()
+                try checkTurnStillActive(request.turnID)
+                switch event {
+                case .started:
+                    continue
+                case .status:
+                    continue
+                case .textDelta(let delta):
+                    accumulatedText += delta
+                case .toolActivity:
+                    continue
+                case .approvalRequired:
+                    completeMessage(actionID, text: "Waiting for approval.", status: .streaming)
+                case .final(let response):
+                    finalText = response.text
+                    didFinish = true
+                case .cancelled:
+                    completeMessage(actionID, text: "\(providerName) cancelled.", status: .cancelled)
+                    rememberAssistantObservation("\(providerName) was cancelled.")
+                    wasCancelled = true
+                }
+            }
+            try Task.checkCancellation()
+            try checkTurnStillActive(request.turnID)
+            if wasCancelled {
+                timing.actionFinishedAt = Date()
+                throw RocaError.cancelled
+            }
+            let rawAgentText = (finalText ?? accumulatedText).trimmingCharacters(in: .whitespacesAndNewlines)
+            completeMessage(actionID, text: "\(providerName) finished.", status: .completed)
+            timing.actionFinishedAt = Date()
+            let assistantMessageID = appendAssistantMessage(
+                "",
+                status: .streaming,
+                request: request,
+                directiveType: .runAgent,
+                brainRole: .generalChat
+            )
+            let response: AssistantResponseContent
+            if rawAgentText.isEmpty {
+                response = AssistantResponseContent(
+                    bubbleText: "\(providerName) finished, but I didn't get any details back.",
+                    detailsMarkdown: nil
+                )
+                completeMessage(assistantMessageID, text: response.bubbleText, status: .completed)
+            } else {
+                timing.responseBrainStartedAt = Date()
+                do {
+                    response = try await completeAssistantResponse(
+                        input: Self.agentResultFormattingPrompt(
+                            userInput: input,
+                            providerName: providerName,
+                            project: resolvedProject.project,
+                            rawAgentText: rawAgentText
+                        ),
+                        request: request,
+                        context: context,
+                        provider: brainProvider,
+                        messageID: assistantMessageID
+                    )
+                    timing.responseBrainFinishedAt = Date()
+                } catch {
+                    timing.responseBrainFinishedAt = Date()
+                    if Self.isCancellation(error) {
+                        throw error
+                    }
+                    response = Self.fallbackAgentResponse(providerName: providerName, rawAgentText: rawAgentText)
+                    emitDiagnostic(
+                        kind: .agentProviderDiagnostic,
+                        turnID: request.turnID,
+                        phase: "agentResultFormatting",
+                        providerID: providerID,
+                        directiveType: .runAgent,
+                        outcome: "fallback",
+                        metadata: diagnosticMetadata(for: request, error: error)
+                    )
+                }
+                try checkTurnStillActive(request.turnID)
+                completeMessage(
+                    assistantMessageID,
+                    text: response.bubbleText,
+                    detailsMarkdown: response.detailsMarkdown,
+                    status: .completed
+                )
+            }
+            remember(userText: input, assistantText: response.conversationText)
+            try await speak(response.bubbleText, request: request, timing: &timing)
+            emitDiagnostic(
+                kind: .agentRunCompleted,
+                turnID: request.turnID,
+                phase: "agentRun",
+                providerID: providerID,
+                directiveType: .runAgent,
+                outcome: AssistantTurnOutcome.completed.rawValue,
+                metadata: diagnosticMetadata(
+                    for: request,
+                    extra: [
+                        "agentMode": directive.mode.rawValue,
+                        "agentDidFinish": String(didFinish)
+                    ]
+                )
+            )
+        } catch RocaError.approvalRequired(let detail) {
+            timing.actionFinishedAt = Date()
+            let message = "I need approval before I hand this to \(providerName): \(detail)"
+            completeMessage(actionID, text: message, status: .failed)
+            rememberAssistantObservation(message)
+            emitDiagnostic(
+                kind: .agentRunFailed,
+                turnID: request.turnID,
+                phase: "approval",
+                providerID: providerID,
+                directiveType: .runAgent,
+                outcome: AssistantTurnOutcome.failed.rawValue,
+                metadata: diagnosticMetadata(for: request, error: RocaError.approvalRequired(detail))
+            )
+            try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
+        } catch {
+            timing.actionFinishedAt = Date()
+            if Self.isCancellation(error) {
+                throw error
+            }
+            let message = "I couldn't finish that with \(providerName): \(error.localizedDescription)"
+            completeMessage(actionID, text: message, status: .failed)
+            rememberAssistantObservation(message)
+            emitDiagnostic(
+                kind: .agentRunFailed,
+                turnID: request.turnID,
+                phase: "agentRun",
+                providerID: providerID,
+                directiveType: .runAgent,
+                outcome: AssistantTurnOutcome.failed.rawValue,
+                metadata: diagnosticMetadata(for: request, error: error)
+            )
+            try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
+        }
+    }
+
+    private func resolveProject(
+        for directive: AgentDirectiveRequest,
+        providerName: String,
+        provider: any AgentProvider,
+        request: AssistantSessionTurnRequest,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> (project: ProjectIdentity?, shouldContinue: Bool) {
+        guard let projectName = directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !projectName.isEmpty
+        else {
+            return (nil, true)
+        }
+
+        let projects = try await projectCatalog?.projects() ?? []
+        try checkTurnStillActive(request.turnID)
+        switch ProjectIdentityResolver(projects: projects).resolve(projectName) {
+        case .resolved(let project):
+            return (project, true)
+        case .ambiguous(_, let candidates):
+            let names = candidates.map(\.displayName).joined(separator: ", ")
+            let message = "Which project do you mean: \(names)?"
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing)
+            return (nil, false)
+        case .missing:
+            if let discoverer = provider as? any AgentProjectDiscovering {
+                let lookupID = appendActionMessage("Looking for \(projectName) in \(providerName)...", status: .pending, request: request, directiveType: .runAgent)
+                emitDiagnostic(
+                    kind: .agentProjectLookupStarted,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    providerID: directive.resolvedProviderID,
+                    directiveType: .runAgent,
+                    metadata: diagnosticMetadata(for: request, extra: ["projectQueryPresent": "true"])
+                )
+                do {
+                    let candidates = try await discoverer.discoverProjects(
+                        matching: ProjectDiscoveryQuery(projectName: projectName, prompt: directive.prompt)
+                    )
+                    try checkTurnStillActive(request.turnID)
+                    switch Self.discoveryResolution(for: candidates, query: projectName) {
+                    case .resolved(let project):
+                        try? await projectWriter?.upsert(project)
+                        try checkTurnStillActive(request.turnID)
+                        completeMessage(lookupID, text: "Found \(project.displayName).", status: .completed)
+                        rememberAssistantObservation("Found \(project.displayName) in \(providerName).")
+                        emitDiagnostic(
+                            kind: .agentProjectLookupCompleted,
+                            turnID: request.turnID,
+                            phase: "projectLookup",
+                            providerID: directive.resolvedProviderID,
+                            directiveType: .runAgent,
+                            outcome: "resolved",
+                            metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                        )
+                        return (project, true)
+                    case .ambiguous(_, let candidates):
+                        completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
+                        let names = candidates.map(\.displayName).joined(separator: ", ")
+                        let message = "Which project do you mean: \(names)?"
+                        let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+                        completeMessage(id, text: message, status: .completed)
+                        rememberAssistantObservation(message)
+                        emitDiagnostic(
+                            kind: .agentProjectLookupCompleted,
+                            turnID: request.turnID,
+                            phase: "projectLookup",
+                            providerID: directive.resolvedProviderID,
+                            directiveType: .runAgent,
+                            outcome: "ambiguous",
+                            metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                        )
+                        try await speak(message, request: request, timing: &timing)
+                        return (nil, false)
+                    case .missing:
+                        completeMessage(lookupID, text: "No \(providerName) project match found.", status: .completed)
+                        emitDiagnostic(
+                            kind: .agentProjectLookupCompleted,
+                            turnID: request.turnID,
+                            phase: "projectLookup",
+                            providerID: directive.resolvedProviderID,
+                            directiveType: .runAgent,
+                            outcome: "missing",
+                            metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                        )
+                        break
+                    }
+                } catch {
+                    completeMessage(lookupID, text: "\(providerName) project lookup failed.", status: .failed)
+                    emitDiagnostic(
+                        kind: .agentProjectLookupFailed,
+                        turnID: request.turnID,
+                        phase: "projectLookup",
+                        providerID: directive.resolvedProviderID,
+                        directiveType: .runAgent,
+                        outcome: AssistantTurnOutcome.failed.rawValue,
+                        metadata: diagnosticMetadata(for: request, error: error, extra: ["projectQueryPresent": "true"])
+                    )
+                    // Discovery is a convenience fallback. If it fails, ask for the folder.
+                    let message = "I couldn't read \(providerName)'s project list in time, so I don't know the \(projectName) project folder yet. Please give me the local folder or try again."
+                    let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+                    completeMessage(id, text: message, status: .completed)
+                    rememberAssistantObservation(message)
+                    try await speak(message, request: request, timing: &timing)
+                    return (nil, false)
+                }
+            }
+            let message = "I don't know the \(projectName) project folder yet. Please give me the local folder before I hand this to \(providerName)."
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing)
+            return (nil, false)
+        }
+    }
+
+    private static func discoveryResolution(
+        for candidates: [ProjectDiscoveryCandidate],
+        query: String
+    ) -> ProjectResolution {
+        let usable = candidates
+            .filter { $0.confidence != .low }
+            .sorted {
+                if $0.score != $1.score {
+                    return $0.score > $1.score
+                }
+                return $0.project.displayName.localizedCaseInsensitiveCompare($1.project.displayName) == .orderedAscending
+            }
+        guard let best = usable.first else {
+            return .missing(query: query)
+        }
+        if let runnerUp = usable.dropFirst().first, best.score - runnerUp.score < 25 {
+            return .ambiguous(query: query, candidates: uniqueProjects(usable.map(\.project)))
+        }
+        return .resolved(best.project)
+    }
+
+    private static func uniqueProjects(_ projects: [ProjectIdentity]) -> [ProjectIdentity] {
+        var seen = Set<String>()
+        return projects
+            .filter { seen.insert(ProjectIdentityResolver.normalizedKey($0.localPath)).inserted }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
     private func completeAssistantResponse(
@@ -514,6 +1015,8 @@ public actor DefaultAssistantSessionOrchestrator {
         var accumulated = ""
         var finalText: String?
         for try await event in events {
+            try Task.checkCancellation()
+            try checkTurnStillActive(request.turnID)
             switch event {
             case .started:
                 continue
@@ -564,10 +1067,8 @@ public actor DefaultAssistantSessionOrchestrator {
         timing.recordTTSPreparation(from: chunkPlanStartedAt, to: Date())
 
         for chunk in chunks {
-            if isTurnCancelled(request.turnID) {
-                throw RocaError.cancelled
-            }
             try Task.checkCancellation()
+            try checkTurnStillActive(request.turnID)
 
             let utteranceID = UtteranceID.make()
             let preparationStartedAt = Date()
@@ -627,14 +1128,32 @@ public actor DefaultAssistantSessionOrchestrator {
             cancelledTurnIDs.insert(activeBrainRequestID)
             await activeBrainProvider?.cancel(activeBrainRequestID)
         }
+        if let activeAgentRunID {
+            await activeAgentProvider?.cancel(activeAgentRunID)
+        }
         activeBrainProvider = nil
         activeBrainRequestID = nil
+        activeAgentProvider = nil
+        activeAgentRunID = nil
         await speechOrchestrator.stopSpeaking()
     }
 
     private func remember(userText: String, assistantText: String) {
         conversationMessages.append(BrainMessage(role: .user, content: userText))
         conversationMessages.append(BrainMessage(role: .assistant, content: assistantText))
+        trimConversationMessages()
+    }
+
+    private func rememberAssistantObservation(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        conversationMessages.append(BrainMessage(role: .assistant, content: "Roca action/status: \(trimmed)"))
+        trimConversationMessages()
+    }
+
+    private func trimConversationMessages() {
         if conversationMessages.count > 10 {
             conversationMessages.removeFirst(conversationMessages.count - 10)
         }
@@ -689,6 +1208,27 @@ public actor DefaultAssistantSessionOrchestrator {
                 text: text,
                 status: status,
                 metadata: turnMetadata(for: request, directiveType: directiveType)
+            )
+        )
+    }
+
+    @discardableResult
+    private func appendAgentApprovalMessage(_ prompt: AgentApprovalPrompt) -> ChatMessageID {
+        let messageID = ChatMessageID.make()
+        return appendMessage(
+            ChatMessage(
+                id: messageID,
+                turnID: activeTurnID,
+                role: .action,
+                source: .localAction,
+                text: prompt.title,
+                approvalRequest: ChatApprovalRequest(
+                    id: messageID,
+                    title: prompt.title,
+                    detail: prompt.detail,
+                    requirement: prompt.requirement
+                ),
+                status: .pending
             )
         )
     }
@@ -812,6 +1352,42 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
+    private func emitDiagnostic(
+        kind: AssistantDiagnosticEventKind,
+        turnID: BrainRequestID?,
+        phase: String? = nil,
+        providerID: ProviderID? = nil,
+        modelID: String? = nil,
+        directiveType: AssistantDirectiveType? = nil,
+        outcome: String? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        let event = AssistantDiagnosticEvent(
+            turnID: turnID,
+            kind: kind,
+            phase: phase,
+            providerID: providerID,
+            modelID: modelID,
+            directiveType: directiveType,
+            outcome: outcome,
+            metadata: metadata
+        )
+        for continuation in diagnosticsContinuations.values {
+            continuation.yield(event)
+        }
+    }
+
+    private func recordTurnCancellation(_ turnID: BrainRequestID) {
+        cancelledTurnIDs.insert(turnID)
+        if activeTurnID == turnID {
+            activeTurnID = nil
+        }
+        if !messages.contains(where: { $0.turnID == turnID && $0.text == "Assistant cancelled." && $0.status == .cancelled }) {
+            appendStatus("Assistant cancelled.", status: .cancelled, turnID: turnID)
+        }
+        markTurnMessages(turnID, status: .cancelled)
+    }
+
     private func addMetricsContinuation(
         _ continuation: AsyncStream<AssistantTurnMetrics>.Continuation,
         id: UUID
@@ -823,8 +1399,68 @@ public actor DefaultAssistantSessionOrchestrator {
         metricsContinuations.removeValue(forKey: id)
     }
 
+    private func addDiagnosticsContinuation(
+        _ continuation: AsyncStream<AssistantDiagnosticEvent>.Continuation,
+        id: UUID
+    ) {
+        diagnosticsContinuations[id] = continuation
+    }
+
+    private func removeDiagnosticsContinuation(_ id: UUID) {
+        diagnosticsContinuations.removeValue(forKey: id)
+    }
+
     private func isTurnCancelled(_ turnID: BrainRequestID) -> Bool {
         cancelledTurnIDs.contains(turnID)
+    }
+
+    private func checkTurnStillActive(_ turnID: BrainRequestID) throws {
+        if isTurnCancelled(turnID) {
+            throw RocaError.cancelled
+        }
+    }
+
+    private func diagnosticMetadata(
+        for request: AssistantSessionTurnRequest,
+        error: Error? = nil,
+        extra: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata = extra
+        metadata["inputMode"] = request.inputMode.rawValue
+        metadata["outputMode"] = request.outputMode.rawValue
+        let routerSelection = request.selection(for: .companionRouter)
+        metadata["routerProviderID"] = routerSelection.providerID.rawValue
+        if let modelID = routerSelection.modelID {
+            metadata["routerModelID"] = modelID
+        }
+        let chatSelection = request.selection(for: .generalChat)
+        metadata["chatProviderID"] = chatSelection.providerID.rawValue
+        if let modelID = chatSelection.modelID {
+            metadata["chatModelID"] = modelID
+        }
+        if let error {
+            metadata["errorType"] = Self.diagnosticErrorType(error)
+        }
+        return metadata
+    }
+
+    private nonisolated static func diagnosticErrorType(_ error: Error) -> String {
+        if isCancellation(error) {
+            return "cancelled"
+        }
+        if case RocaError.providerTimedOut = error {
+            return "providerTimedOut"
+        }
+        if case RocaError.providerUnavailable = error {
+            return "providerUnavailable"
+        }
+        if case RocaError.approvalRequired = error {
+            return "approvalRequired"
+        }
+        if case RocaError.approvalDenied = error {
+            return "approvalDenied"
+        }
+        return String(describing: type(of: error))
     }
 
     private func emit(_ activity: RocaActivity, message: String, correlationID: String?) async {
@@ -956,6 +1592,77 @@ public actor DefaultAssistantSessionOrchestrator {
             (message, .failed)
         }
     }
+
+    private nonisolated static func agentApprovalDecisionText(_ decision: AgentApprovalDecision) -> String {
+        switch decision {
+        case .approve:
+            "Approved once."
+        case .approveForSession:
+            "Remembered approval."
+        case .deny:
+            "Denied."
+        case .cancel:
+            "Cancelled."
+        }
+    }
+
+    private nonisolated static func agentApprovalMessageStatus(_ decision: AgentApprovalDecision) -> ChatMessageStatus {
+        switch decision {
+        case .approve, .approveForSession:
+            .completed
+        case .deny:
+            .failed
+        case .cancel:
+            .cancelled
+        }
+    }
+
+    private nonisolated static func agentIntroText(providerName: String, project: ProjectIdentity?) -> String {
+        if let project {
+            return "I'll ask \(providerName) to inspect \(project.displayName) and summarize what it finds."
+        }
+        return "I'll ask \(providerName) and summarize what it finds."
+    }
+
+    private nonisolated static func agentResultFormattingPrompt(
+        userInput: String,
+        providerName: String,
+        project: ProjectIdentity?,
+        rawAgentText: String
+    ) -> String {
+        let projectText = project.map { "\($0.displayName) at \($0.localPath)" } ?? "No specific project"
+        return """
+        The user asked Roca to use \(providerName).
+
+        User request:
+        \(userInput)
+
+        Project:
+        \(projectText)
+
+        \(providerName)'s raw result:
+        \(rawAgentText)
+
+        Return Roca's final response as JSON using the required bubbleText/detailsMarkdown shape.
+        Keep bubbleText short, conversational, and suitable for speech.
+        Put tables, endpoints, long lists, and implementation details in detailsMarkdown.
+        Do not include raw tool progress, shell commands, or narration about how \(providerName) searched unless it is essential to the answer.
+        """
+    }
+
+    private nonisolated static func fallbackAgentResponse(
+        providerName: String,
+        rawAgentText: String
+    ) -> AssistantResponseContent {
+        let parsed = AssistantPromptCatalog.parseAssistantResponse(rawAgentText)
+        guard parsed.detailsMarkdown != nil else {
+            return parsed
+        }
+        return AssistantResponseContent(
+            bubbleText: "\(providerName) finished. I put the details below.",
+            detailsMarkdown: parsed.detailsMarkdown
+        )
+    }
 }
 
 private struct ActiveAssistantSessionListeningSession: Sendable {
@@ -979,6 +1686,8 @@ private extension AssistantDirective {
             .insertText
         case .readSelection:
             .readSelection
+        case .runAgent:
+            .runAgent
         case .unsupported:
             .unsupported
         }

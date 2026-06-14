@@ -375,6 +375,56 @@ func explicitSTTProviderDoesNotFallBackWhenUnavailable() async throws {
     }
 }
 
+@Test
+func resolverUsesRequestedAgentProviderWhenAvailable() async throws {
+    let codex = ProviderID(rawValue: "codex-agent")
+    let registry = InMemoryProviderRegistry(
+        descriptors: [
+            providerDescriptor(id: codex, kind: .agent, displayName: "Codex")
+        ]
+    )
+    let provider = FakeAgentProvider(id: codex, displayName: "Codex")
+    let resolver = DefaultProviderResolver(
+        registry: registry,
+        ttsProviders: [],
+        agentProviders: [provider],
+        ttsFallbackOrder: []
+    )
+
+    let resolved = try await resolver.agentProvider(id: codex)
+
+    #expect(resolved.id == codex)
+    #expect(await provider.prepareCallCount == 1)
+}
+
+@Test
+func resolverRejectsDisabledAgentProvider() async throws {
+    let codex = ProviderID(rawValue: "codex-agent")
+    let registry = InMemoryProviderRegistry(
+        descriptors: [
+            ProviderDescriptor(
+                id: codex,
+                kind: .agent,
+                displayName: "Codex",
+                isEnabled: false,
+                isBuiltIn: true,
+                locality: .remote
+            )
+        ]
+    )
+    let provider = FakeAgentProvider(id: codex, displayName: "Codex")
+    let resolver = DefaultProviderResolver(
+        registry: registry,
+        ttsProviders: [],
+        agentProviders: [provider],
+        ttsFallbackOrder: []
+    )
+
+    await #expect(throws: RocaError.providerUnavailable(codex)) {
+        _ = try await resolver.agentProvider(id: codex)
+    }
+}
+
 private func providerDescriptor(id: ProviderID, displayName: String) -> ProviderDescriptor {
     providerDescriptor(id: id, kind: .tts, displayName: displayName)
 }
@@ -388,4 +438,35 @@ private func providerDescriptor(id: ProviderID, kind: ProviderKind, displayName:
         isBuiltIn: true,
         locality: .local
     )
+}
+
+private actor FakeAgentProvider: AgentProvider {
+    let id: ProviderID
+    let displayName: String
+    let capabilities = AgentCapabilities(
+        supportsStreaming: true,
+        supportsToolApprovals: true,
+        supportsLocalExecution: true,
+        locality: .remote,
+        supportedModes: [.ask, .plan, .act]
+    )
+    private(set) var prepareCallCount = 0
+
+    init(id: ProviderID, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func prepare() async throws {
+        prepareCallCount += 1
+    }
+
+    func start(_ request: AgentRunRequest) async throws -> AsyncThrowingStream<AgentEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(runID: request.runID, providerID: id))
+            continuation.finish()
+        }
+    }
+
+    func cancel(_ runID: AgentRunID) async {}
 }

@@ -227,6 +227,9 @@ public struct EvalRunner: Sendable {
             expectedAppName: turn.expectations?.appName,
             expectedBundleID: turn.expectations?.bundleID,
             expectedInsertedText: turn.expectations?.insertedText,
+            expectedAgentProviderID: turn.expectations?.agentProviderID,
+            expectedProjectName: turn.expectations?.projectName,
+            expectedAgentMode: turn.expectations?.agentMode,
             expectsDetailsMarkdown: turn.expectations?.expectsDetailsMarkdown,
             maxBubbleCharacters: turn.expectations?.maxBubbleCharacters,
             parsedDirective: parsedDirective?.directiveType,
@@ -234,6 +237,11 @@ public struct EvalRunner: Sendable {
             directiveBundleID: parsedDirective?.bundleID,
             directiveText: parsedDirective?.text,
             directiveMessage: parsedDirective?.message,
+            directiveAgentProviderID: parsedDirective?.agentProviderID?.rawValue,
+            directiveAgentProviderName: parsedDirective?.agentProviderName,
+            directiveProjectName: parsedDirective?.projectName,
+            directiveAgentMode: parsedDirective?.agentMode,
+            directivePrompt: parsedDirective?.agentPrompt,
             directiveRawText: directiveRawText,
             directiveParseError: directiveParseError,
             dryRunAction: dryRunAction,
@@ -285,6 +293,8 @@ public struct EvalRunner: Sendable {
             return .wouldInsert
         case .readSelection:
             return .wouldReadSelection
+        case .runAgent:
+            return .wouldRunAgent
         case .unsupported:
             return .wouldRefuseUnsupported
         }
@@ -314,6 +324,16 @@ public struct EvalRunner: Sendable {
             return true
         }
         if let insertedText = expectations.insertedText, directive.text != insertedText {
+            return true
+        }
+        if let agentProviderID = expectations.agentProviderID,
+           directive.agentProviderID?.rawValue != agentProviderID {
+            return true
+        }
+        if let projectName = expectations.projectName, !matches(directive.projectName, projectName) {
+            return true
+        }
+        if let agentMode = expectations.agentMode, directive.agentMode != agentMode {
             return true
         }
         return false
@@ -422,6 +442,8 @@ private extension AssistantDirective {
             .insertText
         case .readSelection:
             .readSelection
+        case .runAgent:
+            .runAgent
         case .unsupported:
             .unsupported
         }
@@ -455,6 +477,41 @@ private extension AssistantDirective {
     var message: String? {
         if case .unsupported(let message) = self {
             return message
+        }
+        return nil
+    }
+
+    var agentProviderID: ProviderID? {
+        if case .runAgent(let request) = self {
+            return request.resolvedProviderID
+        }
+        return nil
+    }
+
+    var agentProviderName: String? {
+        if case .runAgent(let request) = self {
+            return request.providerName
+        }
+        return nil
+    }
+
+    var projectName: String? {
+        if case .runAgent(let request) = self {
+            return request.projectName
+        }
+        return nil
+    }
+
+    var agentMode: AgentMode? {
+        if case .runAgent(let request) = self {
+            return request.mode
+        }
+        return nil
+    }
+
+    var agentPrompt: String? {
+        if case .runAgent(let request) = self {
+            return request.prompt
         }
         return nil
     }

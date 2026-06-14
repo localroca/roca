@@ -4,6 +4,7 @@ public enum ProviderKind: String, Codable, Sendable {
     case tts
     case stt
     case brain
+    case agent
 }
 
 public enum ProviderLocality: String, Codable, Hashable, Sendable {
@@ -50,6 +51,8 @@ public enum RocaError: Error, Equatable, Sendable, LocalizedError {
     case playbackFailed(String)
     case selectionUnavailable(String)
     case storageFailed(String)
+    case approvalRequired(String)
+    case approvalDenied(String)
     case cancelled
 
     public var errorDescription: String? {
@@ -72,6 +75,10 @@ public enum RocaError: Error, Equatable, Sendable, LocalizedError {
             "Selection unavailable: \(message)"
         case .storageFailed(let message):
             "Storage failed: \(message)"
+        case .approvalRequired(let message):
+            "Approval required: \(message)"
+        case .approvalDenied(let message):
+            "Approval denied: \(message)"
         case .cancelled:
             "Cancelled."
         }

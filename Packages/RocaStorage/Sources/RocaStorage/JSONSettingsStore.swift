@@ -61,6 +61,7 @@ private struct RocaSettingsDisk: Codable {
     var assistantSpeechMuted: Bool
     var privacyPreference: PrivacyPreference
     var rawTranscriptLoggingEnabled: Bool
+    var assistantDiagnosticsLoggingEnabled: Bool
 
     init(_ settings: RocaSettings) {
         self.selectedTTSProvider = settings.selectedTTSProvider?.rawValue
@@ -84,6 +85,7 @@ private struct RocaSettingsDisk: Codable {
         self.assistantSpeechMuted = settings.assistantSpeechMuted
         self.privacyPreference = settings.privacyPreference
         self.rawTranscriptLoggingEnabled = settings.rawTranscriptLoggingEnabled
+        self.assistantDiagnosticsLoggingEnabled = settings.assistantDiagnosticsLoggingEnabled
     }
 
     var domain: RocaSettings {
@@ -111,7 +113,8 @@ private struct RocaSettingsDisk: Codable {
             companionWarmth: companionWarmth,
             assistantSpeechMuted: assistantSpeechMuted,
             privacyPreference: privacyPreference,
-            rawTranscriptLoggingEnabled: rawTranscriptLoggingEnabled
+            rawTranscriptLoggingEnabled: rawTranscriptLoggingEnabled,
+            assistantDiagnosticsLoggingEnabled: assistantDiagnosticsLoggingEnabled
         )
     }
 
@@ -131,6 +134,7 @@ private struct RocaSettingsDisk: Codable {
         case assistantSpeechMuted
         case privacyPreference
         case rawTranscriptLoggingEnabled
+        case assistantDiagnosticsLoggingEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -160,5 +164,6 @@ private struct RocaSettingsDisk: Codable {
         assistantSpeechMuted = try container.decodeIfPresent(Bool.self, forKey: .assistantSpeechMuted) ?? false
         privacyPreference = try container.decodeIfPresent(PrivacyPreference.self, forKey: .privacyPreference) ?? .localOnly
         rawTranscriptLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .rawTranscriptLoggingEnabled) ?? false
+        assistantDiagnosticsLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .assistantDiagnosticsLoggingEnabled) ?? false
     }
 }

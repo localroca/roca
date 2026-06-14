@@ -30,7 +30,7 @@ public struct AssistantResponseContent: Equatable, Sendable, Codable {
 }
 
 public enum AssistantPromptCatalog {
-    public static let directivePromptVersion = "assistant-router-2026-05-26-v1"
+    public static let directivePromptVersion = "assistant-router-2026-06-13-v1"
     public static let responsePromptVersion = "companion-response-2026-05-26-v2"
 
     public static let directiveSystemPrompt = """
@@ -42,6 +42,7 @@ public enum AssistantPromptCatalog {
     {"type":"quitApplication","appName":"Safari"}
     {"type":"insertText","text":"exact text to insert"}
     {"type":"readSelection"}
+    {"type":"runAgent","providerID":"codex-agent","projectName":"uni-auth","prompt":"what to ask the agent","mode":"ask"}
     {"type":"unsupported","message":"brief reason"}
 
     Rules:
@@ -49,6 +50,11 @@ public enum AssistantPromptCatalog {
     - Use quitApplication only for explicit requests to quit or close an app.
     - Use insertText only when the user explicitly asks to type, write, insert, reply, or put text into the focused field.
     - Use readSelection only when the user explicitly asks to read the current highlighted or selected text aloud.
+    - Use runAgent only when the user explicitly asks Roca to use an external coding/work agent such as Codex, Claude, or Cursor.
+    - For runAgent providerID, use codex-agent, claude-agent, or cursor-agent.
+    - For runAgent projectName, preserve the project phrase the user gave. Omit it only when no project is mentioned.
+    - For runAgent prompt, include the task for the agent without "ask Codex/Claude/Cursor to".
+    - For runAgent mode, use ask for questions or inspection, plan for plans/tradeoffs, and act for requested code changes.
     - Otherwise use respond.
     - Never invent unsupported command types.
     """

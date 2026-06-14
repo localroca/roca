@@ -12,6 +12,7 @@ public struct ApprovalRecord: Codable, Equatable, Identifiable, Sendable {
     public var title: String
     public var detail: String
     public var category: ApprovalCategory
+    public var agentScope: AgentApprovalScope?
     public var createdAt: Date
     public var lastUsedAt: Date?
 
@@ -20,6 +21,7 @@ public struct ApprovalRecord: Codable, Equatable, Identifiable, Sendable {
         title: String,
         detail: String,
         category: ApprovalCategory,
+        agentScope: AgentApprovalScope? = nil,
         createdAt: Date,
         lastUsedAt: Date? = nil
     ) {
@@ -27,12 +29,14 @@ public struct ApprovalRecord: Codable, Equatable, Identifiable, Sendable {
         self.title = title
         self.detail = detail
         self.category = category
+        self.agentScope = agentScope
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
     }
 }
 
 public enum ApprovalCategory: String, Codable, CaseIterable, Sendable {
+    case agent
     case provider
     case privacy
     case memory
@@ -40,6 +44,8 @@ public enum ApprovalCategory: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
+        case .agent:
+            "Agent"
         case .provider:
             "Provider"
         case .privacy:

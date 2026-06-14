@@ -66,6 +66,13 @@ public protocol ProviderResolving: Sendable {
     func ttsProvider(_ request: TTSResolutionRequest) async throws -> any TTSProvider
     func sttProvider(_ request: STTResolutionRequest) async throws -> any STTProvider
     func brainProvider(id: ProviderID?) async throws -> any BrainProvider
+    func agentProvider(id: ProviderID?) async throws -> any AgentProvider
+}
+
+public extension ProviderResolving {
+    func agentProvider(id: ProviderID?) async throws -> any AgentProvider {
+        throw RocaError.providerUnavailable(id ?? ProviderID(rawValue: "agent.default"))
+    }
 }
 
 public struct TTSResolutionRequest: Sendable {
@@ -109,6 +116,7 @@ public actor DefaultProviderResolver: ProviderResolving {
     private let ttsProviders: [ProviderID: any TTSProvider]
     private let sttProviders: [ProviderID: any STTProvider]
     private let brainProviders: [ProviderID: any BrainProvider]
+    private let agentProviders: [ProviderID: any AgentProvider]
     private let selectedTTSProvider: SelectedProviderLoader
     private let selectedSTTProvider: SelectedProviderLoader
     private let ttsFallbackOrder: [ProviderID]
@@ -119,6 +127,7 @@ public actor DefaultProviderResolver: ProviderResolving {
         ttsProviders: [any TTSProvider],
         sttProviders: [any STTProvider] = [],
         brainProviders: [any BrainProvider] = [],
+        agentProviders: [any AgentProvider] = [],
         selectedTTSProvider: @escaping SelectedProviderLoader = { nil },
         selectedSTTProvider: @escaping SelectedProviderLoader = { nil },
         ttsFallbackOrder: [ProviderID],
@@ -128,6 +137,7 @@ public actor DefaultProviderResolver: ProviderResolving {
         self.ttsProviders = Dictionary(uniqueKeysWithValues: ttsProviders.map { ($0.id, $0) })
         self.sttProviders = Dictionary(uniqueKeysWithValues: sttProviders.map { ($0.id, $0) })
         self.brainProviders = Dictionary(uniqueKeysWithValues: brainProviders.map { ($0.id, $0) })
+        self.agentProviders = Dictionary(uniqueKeysWithValues: agentProviders.map { ($0.id, $0) })
         self.selectedTTSProvider = selectedTTSProvider
         self.selectedSTTProvider = selectedSTTProvider
         self.ttsFallbackOrder = ttsFallbackOrder
@@ -235,5 +245,21 @@ public actor DefaultProviderResolver: ProviderResolving {
             return provider
         }
         throw RocaError.providerUnavailable(id ?? ProviderID(rawValue: "brain.default"))
+    }
+
+    public func agentProvider(id: ProviderID?) async throws -> any AgentProvider {
+        guard let id else {
+            throw RocaError.providerUnavailable(ProviderID(rawValue: "agent.default"))
+        }
+        guard let descriptor = await registry.provider(id: id),
+              descriptor.kind == .agent,
+              descriptor.isEnabled else {
+            throw RocaError.providerUnavailable(id)
+        }
+        guard let provider = agentProviders[id] else {
+            throw RocaError.providerUnavailable(id)
+        }
+        try await provider.prepare()
+        return provider
     }
 }

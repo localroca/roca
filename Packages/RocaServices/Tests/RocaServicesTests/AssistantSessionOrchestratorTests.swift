@@ -89,7 +89,7 @@ func assistantSessionMessagesIncludeBrainMetadata() async throws {
     #expect(user.metadata?.brainProviderID == ProviderID(rawValue: "test-brain"))
     #expect(user.metadata?.brainModelID == "test-model")
     #expect(user.metadata?.brainDisplayName == "Test Model")
-    #expect(user.metadata?.directivePromptVersion == "assistant-router-2026-05-26-v1")
+    #expect(user.metadata?.directivePromptVersion == "assistant-router-2026-06-13-v1")
     #expect(user.metadata?.responsePromptVersion == "companion-response-2026-05-26-v2")
     #expect(assistant.metadata?.directiveType == .respond)
     #expect(assistant.metadata?.brainModelID == "test-model")
@@ -341,6 +341,361 @@ func assistantSessionOpenAppExecutesLocalCommand() async throws {
 }
 
 @Test
+func assistantSessionRunsResolvedAgentProjectWithMockProvider() async throws {
+    let agent = RecordingSessionAgentProvider(responseText: "Codex says uni-auth supports passkey registration.")
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#,
+                responseText: ###"{"bubbleText":"Codex says uni-auth supports passkey registration.","detailsMarkdown":null}"###
+            ),
+            agent: agent
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(
+                id: "uni-auth",
+                displayName: "Uni Auth",
+                aliases: ["uni-auth"],
+                localPath: "/workspace/uni-auth"
+            )
+        ]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText("ask codex about uni-auth", request: sessionRequest(outputMode: .textOnly))
+
+    let agentRequest = try #require(await agent.recordedRequests.first)
+    #expect(agentRequest.workspacePath == "/workspace/uni-auth")
+    #expect(agentRequest.prompt == "what passkey endpoints exist?")
+    #expect(agentRequest.mode == .ask)
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text.contains("ask Codex") })
+    #expect(messages.contains { $0.role == .action && $0.text == "Codex finished." })
+    #expect(messages.contains { $0.role == .assistant && $0.text == "Codex says uni-auth supports passkey registration." })
+}
+
+@Test
+func assistantSessionAsksFollowUpForAmbiguousAgentProject() async throws {
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"ter","prompt":"what auth endpoints exist?","mode":"ask"}"#,
+                responseText: ""
+            ),
+            agent: RecordingSessionAgentProvider(responseText: "")
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", aliases: ["ter-backend"], localPath: "/workspace/ter-backend"),
+            ProjectIdentity(id: "ter-admin", displayName: "TER Admin", aliases: ["ter-admin"], localPath: "/workspace/ter-admin"),
+            ProjectIdentity(id: "ter-frontend", displayName: "TER Frontend", aliases: ["ter-frontend"], localPath: "/workspace/ter-frontend")
+        ]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText("ask codex in ter", request: sessionRequest(outputMode: .textOnly))
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.text == "Which project do you mean: TER Admin, TER Backend, TER Frontend?"
+    })
+}
+
+@Test
+func assistantSessionDiscoversMissingProjectThroughSelectedAgentProvider() async throws {
+    let discoveredProject = ProjectIdentity(
+        id: "uni-auth",
+        displayName: "Uni Auth",
+        aliases: ["uni-auth"],
+        localPath: "/workspace/uni-auth",
+        gitRemoteURL: "https://github.com/bankplace/uni-auth.git"
+    )
+    let agent = RecordingSessionAgentProvider(
+        responseText: "Codex says uni-auth supports passkeys.",
+        discoveryCandidates: [
+            ProjectDiscoveryCandidate(project: discoveredProject, confidence: .high, score: 110)
+        ]
+    )
+    let writer = RecordingProjectWriter()
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#,
+                responseText: ###"{"bubbleText":"Codex found the passkey endpoints.","detailsMarkdown":"## Endpoints\n- POST /v1/auth/passkey/login/begin"}"###
+            ),
+            agent: agent
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([]),
+        projectWriter: writer,
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText("ask codex about uni-auth", request: sessionRequest(outputMode: .textOnly))
+
+    let agentRequest = try #require(await agent.recordedRequests.first)
+    #expect(agentRequest.workspacePath == "/workspace/uni-auth")
+    #expect(await agent.discoveryQueries == [
+        ProjectDiscoveryQuery(projectName: "uni-auth", prompt: "what passkey endpoints exist?")
+    ])
+    #expect(await writer.upsertedProjects == [discoveredProject])
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .action && $0.text == "Found Uni Auth." && $0.status == .completed })
+    #expect(messages.contains { $0.role == .action && $0.text == "Codex finished." && $0.status == .completed })
+    #expect(messages.contains { $0.role == .assistant && $0.detailsMarkdown?.contains("POST /v1/auth/passkey/login/begin") == true })
+}
+
+@Test
+func assistantSessionKeepsAgentProgressOutOfChatAndFormatsFinalResult() async throws {
+    let details = """
+    ## Passkey endpoints
+    | Method | Endpoint |
+    |---|---|
+    | POST | /v1/auth/passkey/login/begin |
+    | POST | /v1/auth/passkey/login/finish |
+    """
+    let brain = ScriptedSessionBrainProvider(
+        directiveJSON: #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#,
+        responseText: """
+        {"bubbleText":"Codex found 2 passkey endpoints. I put the list below.","detailsMarkdown":"\(details.replacingOccurrences(of: "\n", with: "\\n"))"}
+        """
+    )
+    let speech = RecordingSessionSpeech()
+    let agent = NoisySessionAgentProvider(
+        responseText: """
+        I ran ls and grep.
+        | Method | Endpoint |
+        |---|---|
+        | POST | /v1/auth/passkey/login/begin |
+        | POST | /v1/auth/passkey/login/finish |
+        """
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: speech,
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(
+                id: "uni-auth",
+                displayName: "Uni Auth",
+                aliases: ["uni-auth"],
+                localPath: "/workspace/uni-auth"
+            )
+        ]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText("ask codex about uni-auth", request: sessionRequest(outputMode: .speakAll))
+
+    let messages = await orchestrator.messageSnapshot
+    let actionMessages = messages.filter { $0.role == .action }
+    #expect(actionMessages.contains { $0.text == "Interacting with Codex..." || $0.text == "Codex finished." })
+    #expect(!actionMessages.contains { $0.text.localizedCaseInsensitiveContains("ls") })
+    #expect(!actionMessages.contains { $0.text.localizedCaseInsensitiveContains("grep") })
+    #expect(!actionMessages.contains { $0.text.contains("/v1/auth/passkey/login/begin") })
+
+    let finalMessage = try #require(messages.last(where: { $0.role == .assistant }))
+    #expect(finalMessage.text == "Codex found 2 passkey endpoints. I put the list below.")
+    #expect(finalMessage.detailsMarkdown?.contains("/v1/auth/passkey/login/begin") == true)
+    #expect(await speech.spokenTexts == ["Codex found 2 passkey endpoints. I put the list below."])
+}
+
+@Test
+func assistantSessionKeepsFormattedAgentResultInFollowUpContext() async throws {
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#,
+            #"{"type":"respond"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"Codex found 2 passkey endpoints.","detailsMarkdown":"## Endpoints\n- POST /v1/auth/passkey/login/begin\n- POST /v1/auth/passkey/login/finish"}"###,
+            "Sure, I can read them."
+        ]
+    )
+    let agent = RecordingSessionAgentProvider(
+        responseText: """
+        | Method | Endpoint |
+        |---|---|
+        | POST | /v1/auth/passkey/login/begin |
+        | POST | /v1/auth/passkey/login/finish |
+        """
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(
+                id: "uni-auth",
+                displayName: "Uni Auth",
+                aliases: ["uni-auth"],
+                localPath: "/workspace/uni-auth"
+            )
+        ]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText("ask codex about uni-auth", request: sessionRequest(outputMode: .textOnly))
+    await orchestrator.submitText("read me the endpoints", request: sessionRequest(outputMode: .textOnly))
+
+    let followUpRequest = try #require(await brain.recordedRequests.last(where: { $0.role == .generalChat }))
+    #expect(followUpRequest.messages.contains { message in
+        message.role == .assistant
+            && message.content.contains("POST /v1/auth/passkey/login/begin")
+            && message.content.contains("Codex found 2 passkey endpoints.")
+    })
+}
+
+@Test
+func assistantSessionPublishesAndResolvesAgentApprovalPrompt() async throws {
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(directiveJSON: #"{"type":"respond"}"#, responseText: "Done.")
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        stopSpeech: {}
+    )
+    let requirement = AgentApprovalRequirement(
+        providerID: "codex-agent",
+        role: .coding,
+        mode: .act,
+        workspacePath: "/workspace/uni-auth",
+        dataScopes: [.prompt, .workspaceFiles],
+        actionScopes: [.readWorkspace, .runCommands, .editWorkspace]
+    )
+    let prompt = AgentApprovalPrompt(
+        requirement: requirement,
+        title: "Codex needs approval",
+        detail: requirement.detailText
+    )
+
+    let decisionTask = Task {
+        await orchestrator.requestAgentApprovalDecision(for: prompt)
+    }
+    try await waitUntil {
+        await orchestrator.messageSnapshot.contains { $0.approvalRequest?.requirement == requirement }
+    }
+
+    let pendingMessage = try #require(await orchestrator.messageSnapshot.first(where: { $0.approvalRequest != nil }))
+    #expect(pendingMessage.role == .action)
+    #expect(pendingMessage.status == .pending)
+    #expect(pendingMessage.text == "Codex needs approval")
+    #expect(pendingMessage.approvalRequest?.detail.contains("edit workspace") == true)
+
+    await orchestrator.submitAgentApprovalDecision(pendingMessage.id, decision: .approveForSession)
+    let decision = await decisionTask.value
+    let resolvedMessage = try #require(await orchestrator.messageSnapshot.first(where: { $0.id == pendingMessage.id }))
+
+    #expect(decision == .approveForSession)
+    #expect(resolvedMessage.status == .completed)
+    #expect(resolvedMessage.text == "Remembered approval.")
+    #expect(resolvedMessage.approvalRequest?.decision == .approveForSession)
+}
+
+@Test
+func assistantSessionCancelClearsActiveAgentTurnForRetry() async throws {
+    let agent = HangingSessionAgentProvider()
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#,
+                responseText: ""
+            ),
+            agent: agent
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", localPath: "/workspace/uni-auth")
+        ]),
+        stopSpeech: {}
+    )
+
+    let firstTask = Task {
+        await orchestrator.submitText("ask codex about uni-auth", request: sessionRequest(outputMode: .textOnly))
+    }
+    try await waitUntil { await agent.recordedRequests.count == 1 }
+
+    await orchestrator.cancel()
+    try await value(from: firstTask)
+
+    let secondTask = Task {
+        await orchestrator.submitText("ask codex again", request: sessionRequest(outputMode: .textOnly))
+    }
+    try await waitUntil { await agent.recordedRequests.count == 2 }
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .status && $0.status == .cancelled && $0.text == "Assistant cancelled." })
+    #expect(!messages.contains { $0.text == "Finish the current turn first." })
+
+    await orchestrator.cancel()
+    try await value(from: secondTask)
+}
+
+@Test
+func assistantSessionAsksFollowUpForAmbiguousDiscoveredAgentProjects() async throws {
+    let agent = RecordingSessionAgentProvider(
+        responseText: "",
+        discoveryCandidates: [
+            ProjectDiscoveryCandidate(
+                project: ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", localPath: "/workspace/uni-auth"),
+                confidence: .high,
+                score: 95
+            ),
+            ProjectDiscoveryCandidate(
+                project: ProjectIdentity(id: "uni-auth-infra", displayName: "Uni Auth Infra", localPath: "/workspace/uni-auth-infra"),
+                confidence: .high,
+                score: 90
+            )
+        ]
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"uni","prompt":"inspect auth setup","mode":"ask"}"#,
+                responseText: ""
+            ),
+            agent: agent
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText("ask codex in uni", request: sessionRequest(outputMode: .textOnly))
+
+    #expect(await agent.recordedRequests.isEmpty)
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.text == "Which project do you mean: Uni Auth, Uni Auth Infra?"
+    })
+}
+
+@Test
 func assistantSessionSpeaksRecoveryWhenBrainIsUnavailableAfterTranscription() async throws {
     let speech = RecordingSessionSpeech()
     let orchestrator = DefaultAssistantSessionOrchestrator(
@@ -433,6 +788,23 @@ private func value<T: Sendable>(from task: Task<T, Never>, timeout: Duration = .
     }
 }
 
+private func waitUntil(timeout: Duration = .seconds(1), _ condition: @escaping @Sendable () async -> Bool) async throws {
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        group.addTask {
+            while !(await condition()) {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TestTimeoutError.timedOut
+        }
+
+        try await group.next()
+        group.cancelAll()
+    }
+}
+
 private func sessionRequest(
     inputMode: AssistantInputMode = .typed,
     outputMode: AssistantOutputMode,
@@ -459,6 +831,7 @@ private func sessionRequest(
 private struct SessionResolver: ProviderResolving {
     var stt: (any STTProvider)?
     var brain: any BrainProvider
+    var agent: (any AgentProvider)?
 
     func ttsProvider(_ request: TTSResolutionRequest) async throws -> any TTSProvider {
         throw RocaError.providerUnavailable(ProviderID(rawValue: "tts"))
@@ -473,6 +846,13 @@ private struct SessionResolver: ProviderResolving {
 
     func brainProvider(id: ProviderID?) async throws -> any BrainProvider {
         brain
+    }
+
+    func agentProvider(id: ProviderID?) async throws -> any AgentProvider {
+        guard let agent, agent.id == id else {
+            throw RocaError.providerUnavailable(id ?? ProviderID(rawValue: "agent"))
+        }
+        return agent
     }
 }
 
@@ -515,6 +895,44 @@ private actor ScriptedSessionBrainProvider: BrainProvider {
     func cancel(_ requestID: BrainRequestID) async {}
 }
 
+private actor SequencedSessionBrainProvider: BrainProvider {
+    let id = ProviderID(rawValue: "test-brain")
+    let displayName = "Test Brain"
+    let capabilities = BrainCapabilities(
+        supportsStreaming: false,
+        supportsToolCalls: false,
+        supportsLocalExecution: true,
+        locality: .local
+    )
+
+    private var directiveTexts: [String]
+    private var responseTexts: [String]
+    private(set) var recordedRequests: [BrainRequest] = []
+
+    init(directiveTexts: [String], responseTexts: [String]) {
+        self.directiveTexts = directiveTexts
+        self.responseTexts = responseTexts
+    }
+
+    func prepare() async throws {}
+
+    func complete(_ request: BrainRequest) async throws -> AsyncThrowingStream<BrainEvent, Error> {
+        recordedRequests.append(request)
+        let text: String
+        if request.role == .companionRouter {
+            text = directiveTexts.isEmpty ? #"{"type":"respond"}"# : directiveTexts.removeFirst()
+        } else {
+            text = responseTexts.isEmpty ? "Done." : responseTexts.removeFirst()
+        }
+        return AsyncThrowingStream { continuation in
+            continuation.yield(.final(BrainResponse(text: text, usedProvider: id, metadata: [:])))
+            continuation.finish()
+        }
+    }
+
+    func cancel(_ requestID: BrainRequestID) async {}
+}
+
 private actor FailingSessionBrainProvider: BrainProvider {
     let id = ProviderID(rawValue: "test-brain")
     let displayName = "Test Brain"
@@ -537,6 +955,127 @@ private actor FailingSessionBrainProvider: BrainProvider {
     }
 
     func cancel(_ requestID: BrainRequestID) async {}
+}
+
+private actor RecordingSessionAgentProvider: AgentProvider, AgentProjectDiscovering {
+    let id = ProviderID(rawValue: "codex-agent")
+    let displayName = "Codex"
+    let capabilities = AgentCapabilities(
+        supportsStreaming: true,
+        supportsToolApprovals: true,
+        supportsLocalExecution: true,
+        locality: .remote,
+        supportedModes: AgentMode.allCases
+    )
+
+    private(set) var recordedRequests: [AgentRunRequest] = []
+    private(set) var discoveryQueries: [ProjectDiscoveryQuery] = []
+    private let responseText: String
+    private let discoveryCandidates: [ProjectDiscoveryCandidate]
+
+    init(responseText: String, discoveryCandidates: [ProjectDiscoveryCandidate] = []) {
+        self.responseText = responseText
+        self.discoveryCandidates = discoveryCandidates
+    }
+
+    func prepare() async throws {}
+
+    func discoverProjects(matching query: ProjectDiscoveryQuery) async throws -> [ProjectDiscoveryCandidate] {
+        discoveryQueries.append(query)
+        return discoveryCandidates
+    }
+
+    func start(_ request: AgentRunRequest) async throws -> AsyncThrowingStream<AgentEvent, Error> {
+        recordedRequests.append(request)
+        return AsyncThrowingStream { continuation in
+            continuation.yield(.started(runID: request.runID, providerID: id))
+            continuation.yield(.final(AgentResponse(text: responseText, usedProvider: id)))
+            continuation.finish()
+        }
+    }
+
+    func cancel(_ runID: AgentRunID) async {}
+}
+
+private actor NoisySessionAgentProvider: AgentProvider, AgentProjectDiscovering {
+    let id = ProviderID(rawValue: "codex-agent")
+    let displayName = "Codex"
+    let capabilities = AgentCapabilities(
+        supportsStreaming: true,
+        supportsToolApprovals: true,
+        supportsLocalExecution: true,
+        locality: .remote,
+        supportedModes: AgentMode.allCases
+    )
+
+    private let responseText: String
+
+    init(responseText: String) {
+        self.responseText = responseText
+    }
+
+    func prepare() async throws {}
+
+    func discoverProjects(matching query: ProjectDiscoveryQuery) async throws -> [ProjectDiscoveryCandidate] {
+        []
+    }
+
+    func start(_ request: AgentRunRequest) async throws -> AsyncThrowingStream<AgentEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(runID: request.runID, providerID: id))
+            continuation.yield(.toolActivity(AgentToolActivity(kind: .command, title: "ls", status: "listing project files")))
+            continuation.yield(.textDelta("I’ll run ls and grep to inspect the project.\n"))
+            continuation.yield(.toolActivity(AgentToolActivity(kind: .command, title: "grep", status: "searching passkey routes")))
+            continuation.yield(.textDelta("grep found passkey routes.\n"))
+            continuation.yield(.final(AgentResponse(text: responseText, usedProvider: id)))
+            continuation.finish()
+        }
+    }
+
+    func cancel(_ runID: AgentRunID) async {}
+}
+
+private actor HangingSessionAgentProvider: AgentProvider {
+    let id = ProviderID(rawValue: "codex-agent")
+    let displayName = "Codex"
+    let capabilities = AgentCapabilities(
+        supportsStreaming: true,
+        supportsToolApprovals: true,
+        supportsLocalExecution: true,
+        locality: .remote,
+        supportedModes: AgentMode.allCases
+    )
+
+    private(set) var recordedRequests: [AgentRunRequest] = []
+    private(set) var cancelledRunIDs: [AgentRunID] = []
+    private var continuations: [AgentRunID: AsyncThrowingStream<AgentEvent, Error>.Continuation] = [:]
+
+    func prepare() async throws {}
+
+    func start(_ request: AgentRunRequest) async throws -> AsyncThrowingStream<AgentEvent, Error> {
+        recordedRequests.append(request)
+        let stream = AsyncThrowingStream<AgentEvent, Error>.makeStream(of: AgentEvent.self)
+        continuations[request.runID] = stream.continuation
+        stream.continuation.yield(.started(runID: request.runID, providerID: id))
+        return stream.stream
+    }
+
+    func cancel(_ runID: AgentRunID) async {
+        cancelledRunIDs.append(runID)
+        guard let continuation = continuations.removeValue(forKey: runID) else {
+            return
+        }
+        continuation.yield(.cancelled(runID: runID))
+        continuation.finish(throwing: RocaError.cancelled)
+    }
+}
+
+private actor RecordingProjectWriter: ProjectIdentityWriting {
+    private(set) var upsertedProjects: [ProjectIdentity] = []
+
+    func upsert(_ project: ProjectIdentity) async throws {
+        upsertedProjects.append(project)
+    }
 }
 
 private actor RecordingSessionSTTProvider: STTProvider {

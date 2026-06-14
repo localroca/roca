@@ -51,3 +51,9 @@ profile without replacing existing speed results.
 
 The app uses these compact files for quality icons and device-relative speed
 hints. Full raw runs stay local unless we intentionally publish a result.
+
+## Agent Scenarios
+
+Agent-routing scenarios are dry-run only. They verify that the model emits the
+right provider, project phrase, task prompt, and mode, but the harness never
+starts Codex, Claude, Cursor, or any other external agent.

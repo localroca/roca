@@ -77,6 +77,31 @@ public struct ChatMessageMetadata: Codable, Equatable, Sendable {
     }
 }
 
+public struct ChatApprovalRequest: Codable, Equatable, Sendable {
+    public var id: ChatMessageID
+    public var title: String
+    public var detail: String
+    public var requirement: AgentApprovalRequirement
+    public var decision: AgentApprovalDecision?
+    public var decidedAt: Date?
+
+    public init(
+        id: ChatMessageID,
+        title: String,
+        detail: String,
+        requirement: AgentApprovalRequirement,
+        decision: AgentApprovalDecision? = nil,
+        decidedAt: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.requirement = requirement
+        self.decision = decision
+        self.decidedAt = decidedAt
+    }
+}
+
 public struct AssistantSessionTurnRequest: Sendable, Equatable {
     public var turnID: BrainRequestID
     public var transcriptionID: TranscriptionID
@@ -125,6 +150,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     public var source: ChatMessageSource
     public var text: String
     public var detailsMarkdown: String?
+    public var approvalRequest: ChatApprovalRequest?
     public var status: ChatMessageStatus
     public var metadata: ChatMessageMetadata?
     public var createdAt: Date
@@ -136,6 +162,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         source: ChatMessageSource,
         text: String,
         detailsMarkdown: String? = nil,
+        approvalRequest: ChatApprovalRequest? = nil,
         status: ChatMessageStatus,
         metadata: ChatMessageMetadata? = nil,
         createdAt: Date = Date()
@@ -146,6 +173,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.source = source
         self.text = text
         self.detailsMarkdown = detailsMarkdown
+        self.approvalRequest = approvalRequest
         self.status = status
         self.metadata = metadata
         self.createdAt = createdAt

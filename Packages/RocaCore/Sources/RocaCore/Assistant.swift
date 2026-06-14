@@ -124,6 +124,7 @@ public enum AssistantDirective: Equatable, Sendable {
     case quitApplication(ApplicationCommandTarget)
     case insertText(String)
     case readSelection
+    case runAgent(AgentDirectiveRequest)
     case unsupported(String)
 }
 
@@ -146,6 +147,11 @@ public struct AssistantDirectiveEnvelope: Codable, Equatable, Sendable {
     public var text: String?
     public var appName: String?
     public var bundleID: String?
+    public var providerID: String?
+    public var providerName: String?
+    public var projectName: String?
+    public var prompt: String?
+    public var mode: AgentMode?
     public var message: String?
 
     public init(
@@ -153,12 +159,22 @@ public struct AssistantDirectiveEnvelope: Codable, Equatable, Sendable {
         text: String? = nil,
         appName: String? = nil,
         bundleID: String? = nil,
+        providerID: String? = nil,
+        providerName: String? = nil,
+        projectName: String? = nil,
+        prompt: String? = nil,
+        mode: AgentMode? = nil,
         message: String? = nil
     ) {
         self.type = type
         self.text = text
         self.appName = appName
         self.bundleID = bundleID
+        self.providerID = providerID
+        self.providerName = providerName
+        self.projectName = projectName
+        self.prompt = prompt
+        self.mode = mode
         self.message = message
     }
 
@@ -185,6 +201,21 @@ public struct AssistantDirectiveEnvelope: Codable, Equatable, Sendable {
             return .insertText(text)
         case .readSelection:
             return .readSelection
+        case .runAgent:
+            guard let prompt = clean(prompt), !prompt.isEmpty else {
+                throw RocaError.selectionUnavailable("Agent directive needs a prompt.")
+            }
+            let request = AgentDirectiveRequest(
+                providerID: clean(providerID).map(ProviderID.init(rawValue:)),
+                providerName: clean(providerName),
+                projectName: clean(projectName),
+                prompt: prompt,
+                mode: mode ?? .ask
+            )
+            guard request.resolvedProviderID != nil else {
+                throw RocaError.selectionUnavailable("Agent directive needs a provider.")
+            }
+            return .runAgent(request)
         case .unsupported:
             return .unsupported(clean(message) ?? "I cannot do that yet.")
         }
@@ -202,5 +233,62 @@ public enum AssistantDirectiveType: String, Codable, Sendable {
     case quitApplication
     case insertText
     case readSelection
+    case runAgent
     case unsupported
+}
+
+public struct AgentDirectiveRequest: Equatable, Sendable {
+    public var providerID: ProviderID?
+    public var providerName: String?
+    public var projectName: String?
+    public var prompt: String
+    public var mode: AgentMode
+
+    public init(
+        providerID: ProviderID?,
+        providerName: String? = nil,
+        projectName: String? = nil,
+        prompt: String,
+        mode: AgentMode = .ask
+    ) {
+        self.providerID = providerID
+        self.providerName = providerName
+        self.projectName = projectName
+        self.prompt = prompt
+        self.mode = mode
+    }
+
+    public var resolvedProviderID: ProviderID? {
+        providerID ?? providerName.flatMap(Self.providerID(for:))
+    }
+
+    public var providerDisplayName: String {
+        providerName ?? resolvedProviderID.flatMap(Self.providerDisplayName(for:)) ?? "that agent"
+    }
+
+    public static func providerID(for providerName: String) -> ProviderID? {
+        switch ProjectIdentityResolver.normalizedKey(providerName) {
+        case "codex":
+            ProviderID(rawValue: "codex-agent")
+        case "claude":
+            ProviderID(rawValue: "claude-agent")
+        case "cursor":
+            ProviderID(rawValue: "cursor-agent")
+        default:
+            nil
+        }
+    }
+
+    public static func providerDisplayName(for providerID: ProviderID) -> String? {
+        switch providerID.rawValue {
+        case "codex-agent":
+            "Codex"
+        case "claude-agent":
+            "Claude"
+        case "cursor-agent":
+            "Cursor"
+        default:
+            nil
+        }
+    }
 }

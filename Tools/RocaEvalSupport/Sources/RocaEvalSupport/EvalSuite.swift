@@ -147,6 +147,9 @@ public struct EvalTurnExpectations: Codable, Equatable, Sendable {
     public var appName: String?
     public var bundleID: String?
     public var insertedText: String?
+    public var agentProviderID: String?
+    public var projectName: String?
+    public var agentMode: AgentMode?
     public var expectsDetailsMarkdown: Bool?
     public var maxBubbleCharacters: Int?
     public var notes: String?
@@ -156,6 +159,9 @@ public struct EvalTurnExpectations: Codable, Equatable, Sendable {
         appName: String? = nil,
         bundleID: String? = nil,
         insertedText: String? = nil,
+        agentProviderID: String? = nil,
+        projectName: String? = nil,
+        agentMode: AgentMode? = nil,
         expectsDetailsMarkdown: Bool? = nil,
         maxBubbleCharacters: Int? = nil,
         notes: String? = nil
@@ -164,6 +170,9 @@ public struct EvalTurnExpectations: Codable, Equatable, Sendable {
         self.appName = appName
         self.bundleID = bundleID
         self.insertedText = insertedText
+        self.agentProviderID = agentProviderID
+        self.projectName = projectName
+        self.agentMode = agentMode
         self.expectsDetailsMarkdown = expectsDetailsMarkdown
         self.maxBubbleCharacters = maxBubbleCharacters
         self.notes = notes

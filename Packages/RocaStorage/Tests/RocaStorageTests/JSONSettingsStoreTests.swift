@@ -37,6 +37,7 @@ func settingsStoreRoundTripsSpeechPreferences() async throws {
     settings.companionWarmth = .quiet
     settings.assistantSpeechMuted = true
     settings.rawTranscriptLoggingEnabled = true
+    settings.assistantDiagnosticsLoggingEnabled = true
     settings.brainRoles = [
         .companionRouter: BrainProviderSelection(
             providerID: ProviderID(rawValue: "ollama"),
@@ -64,6 +65,7 @@ func settingsStoreRoundTripsSpeechPreferences() async throws {
     #expect(loaded.companionWarmth == .quiet)
     #expect(loaded.assistantSpeechMuted)
     #expect(loaded.rawTranscriptLoggingEnabled)
+    #expect(loaded.assistantDiagnosticsLoggingEnabled)
 
     try? FileManager.default.removeItem(at: directory)
 }
@@ -81,6 +83,7 @@ func settingsStoreDefaultsRawTranscriptLoggingToDisabledWhenMissing() async thro
     let loaded = try await store.load()
 
     #expect(!loaded.rawTranscriptLoggingEnabled)
+    #expect(!loaded.assistantDiagnosticsLoggingEnabled)
 
     try? FileManager.default.removeItem(at: directory)
 }

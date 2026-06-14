@@ -786,6 +786,8 @@ private struct ApprovalRecordRow: View {
 private extension ApprovalCategory {
     var systemImage: String {
         switch self {
+        case .agent:
+            "terminal"
         case .provider:
             "network"
         case .privacy:
@@ -882,6 +884,57 @@ private struct LogsSettingsPane: View {
                 }
             }
 
+            SettingsSection("Assistant Diagnostics") {
+                Toggle(
+                    "Save Redacted Diagnostics",
+                    isOn: Binding(
+                        get: { model.assistantDiagnosticsLoggingEnabled },
+                        set: { model.setAssistantDiagnosticsLoggingEnabled($0) }
+                    )
+                )
+
+                Text("Diagnostics record assistant lifecycle, provider, timing, cancellation, and error categories without raw prompts, transcripts, responses, selected text, or provider output.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                SettingsRow(label: "Status") {
+                    Text(model.assistantDiagnosticsLogSummary)
+                        .foregroundStyle(.secondary)
+                }
+
+                SettingsRow(label: "Path") {
+                    PathText(model.assistantDiagnosticsLogPath)
+                }
+
+                HStack {
+                    Button {
+                        exportDiagnostics()
+                    } label: {
+                        Label("Export Diagnostics...", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(!model.hasAssistantDiagnosticsLog)
+
+                    Button(role: .destructive) {
+                        confirmDeleteDiagnostics()
+                    } label: {
+                        Label("Delete Diagnostics...", systemImage: "trash")
+                    }
+                    .disabled(!model.hasAssistantDiagnosticsLog)
+
+                    Button {
+                        model.refreshAssistantDiagnosticsLogInfo()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+
+                if !model.assistantDiagnosticsLogActionStatus.isEmpty {
+                    Text(model.assistantDiagnosticsLogActionStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             SettingsSection("Assistant Timings") {
                 if model.assistantTurnMetrics.isEmpty {
                     Text("No assistant turns recorded yet.")
@@ -926,6 +979,33 @@ private struct LogsSettingsPane: View {
             return
         }
         model.deleteChatTranscriptLog()
+    }
+
+    private func exportDiagnostics() {
+        let panel = NSSavePanel()
+        panel.title = "Export Assistant Diagnostics"
+        panel.nameFieldStringValue = "assistant_diagnostics.jsonl"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        guard panel.runModal() == .OK,
+              let url = panel.url
+        else {
+            return
+        }
+        model.exportAssistantDiagnosticsLog(to: url)
+    }
+
+    private func confirmDeleteDiagnostics() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete Assistant Diagnostics?"
+        alert.informativeText = "This deletes the local diagnostics file only. Raw transcript logs are separate."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+        model.deleteAssistantDiagnosticsLog()
     }
 }
 

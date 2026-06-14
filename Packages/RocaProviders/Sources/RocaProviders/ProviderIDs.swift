@@ -8,6 +8,7 @@ public enum BuiltInProviderIDs {
     public static let moonshineSTT = ProviderID(rawValue: "moonshine")
     public static let whisperKitSTT = ProviderID(rawValue: "whisperkit")
     public static let ollamaBrain = ProviderID(rawValue: "ollama")
+    public static let codexAgent = ProviderID(rawValue: "codex-agent")
 }
 
 public enum BuiltInProviderDescriptors {
@@ -64,6 +65,14 @@ public enum BuiltInProviderDescriptors {
                 isEnabled: true,
                 isBuiltIn: true,
                 locality: .local
+            ),
+            ProviderDescriptor(
+                id: BuiltInProviderIDs.codexAgent,
+                kind: .agent,
+                displayName: "Codex",
+                isEnabled: true,
+                isBuiltIn: true,
+                locality: .remote
             )
         ]
     }

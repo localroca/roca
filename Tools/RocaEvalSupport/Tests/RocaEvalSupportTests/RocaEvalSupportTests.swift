@@ -131,6 +131,66 @@ func evalRunnerUsesSharedPromptsAndDryRunsActions() async throws {
 }
 
 @Test
+func evalRunnerDryRunsAgentDirectives() async throws {
+    let suite = EvalSuite(
+        schemaVersion: 1,
+        id: "agent_fixture",
+        title: "Agent Fixture",
+        description: "Fixture.",
+        defaultRepeats: 1,
+        scenarios: [
+            EvalScenario(
+                id: "ask_codex",
+                title: "Ask Codex",
+                description: nil,
+                role: .companionRouter,
+                tags: ["agent"],
+                turns: [
+                    EvalTurn(
+                        id: "ask",
+                        user: "Ask Codex about uni-auth passkeys.",
+                        expectations: EvalTurnExpectations(
+                            directives: [.runAgent],
+                            agentProviderID: "codex-agent",
+                            projectName: "uni-auth",
+                            agentMode: .ask
+                        )
+                    )
+                ]
+            )
+        ]
+    )
+    let client = ScriptedEvalBrainClient(
+        models: ["test-model"],
+        responses: [
+            #"{"type":"runAgent","providerID":"codex-agent","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#
+        ]
+    )
+    let runner = EvalRunner(client: client)
+    let output = try await runner.run(
+        EvalRunConfiguration(
+            suite: suite,
+            models: .names(["test-model"]),
+            filter: EvalScenarioFilter(),
+            repeats: 1,
+            baseURL: URL(string: "http://127.0.0.1:11434")!,
+            outputDirectory: URL(fileURLWithPath: "/tmp/roca-eval-test"),
+            runID: "test-run"
+        )
+    )
+
+    let record = try #require(output.turns.first)
+    #expect(record.parsedDirective == .runAgent)
+    #expect(record.dryRunAction == .wouldRunAgent)
+    #expect(record.directiveAgentProviderID == "codex-agent")
+    #expect(record.directiveProjectName == "uni-auth")
+    #expect(record.directiveAgentMode == .ask)
+    #expect(record.directivePrompt == "what passkey endpoints exist?")
+    #expect(!record.criticalRoutingFailure)
+    #expect(await client.requestRoles == [.companionRouter])
+}
+
+@Test
 func evalRunnerTreatsEmptyActionTargetsAsRoutingFailures() async throws {
     let suite = try JSONDecoder().decode(EvalSuite.self, from: suiteFixtureData())
     let client = ScriptedEvalBrainClient(

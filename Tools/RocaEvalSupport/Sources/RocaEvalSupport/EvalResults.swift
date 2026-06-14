@@ -169,6 +169,9 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
     public var expectedAppName: String?
     public var expectedBundleID: String?
     public var expectedInsertedText: String?
+    public var expectedAgentProviderID: String?
+    public var expectedProjectName: String?
+    public var expectedAgentMode: AgentMode?
     public var expectsDetailsMarkdown: Bool?
     public var maxBubbleCharacters: Int?
     public var parsedDirective: AssistantDirectiveType?
@@ -176,6 +179,11 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
     public var directiveBundleID: String?
     public var directiveText: String?
     public var directiveMessage: String?
+    public var directiveAgentProviderID: String?
+    public var directiveAgentProviderName: String?
+    public var directiveProjectName: String?
+    public var directiveAgentMode: AgentMode?
+    public var directivePrompt: String?
     public var directiveRawText: String
     public var directiveParseError: String?
     public var dryRunAction: EvalDryRunAction
@@ -210,6 +218,9 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
         expectedAppName: String?,
         expectedBundleID: String?,
         expectedInsertedText: String?,
+        expectedAgentProviderID: String? = nil,
+        expectedProjectName: String? = nil,
+        expectedAgentMode: AgentMode? = nil,
         expectsDetailsMarkdown: Bool?,
         maxBubbleCharacters: Int?,
         parsedDirective: AssistantDirectiveType?,
@@ -217,6 +228,11 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
         directiveBundleID: String?,
         directiveText: String?,
         directiveMessage: String?,
+        directiveAgentProviderID: String? = nil,
+        directiveAgentProviderName: String? = nil,
+        directiveProjectName: String? = nil,
+        directiveAgentMode: AgentMode? = nil,
+        directivePrompt: String? = nil,
         directiveRawText: String,
         directiveParseError: String?,
         dryRunAction: EvalDryRunAction,
@@ -250,6 +266,9 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
         self.expectedAppName = expectedAppName
         self.expectedBundleID = expectedBundleID
         self.expectedInsertedText = expectedInsertedText
+        self.expectedAgentProviderID = expectedAgentProviderID
+        self.expectedProjectName = expectedProjectName
+        self.expectedAgentMode = expectedAgentMode
         self.expectsDetailsMarkdown = expectsDetailsMarkdown
         self.maxBubbleCharacters = maxBubbleCharacters
         self.parsedDirective = parsedDirective
@@ -257,6 +276,11 @@ public struct EvalTurnRecord: Codable, Equatable, Sendable {
         self.directiveBundleID = directiveBundleID
         self.directiveText = directiveText
         self.directiveMessage = directiveMessage
+        self.directiveAgentProviderID = directiveAgentProviderID
+        self.directiveAgentProviderName = directiveAgentProviderName
+        self.directiveProjectName = directiveProjectName
+        self.directiveAgentMode = directiveAgentMode
+        self.directivePrompt = directivePrompt
         self.directiveRawText = directiveRawText
         self.directiveParseError = directiveParseError
         self.dryRunAction = dryRunAction
@@ -280,6 +304,7 @@ public enum EvalDryRunAction: String, Codable, Equatable, Sendable {
     case wouldQuit
     case wouldInsert
     case wouldReadSelection
+    case wouldRunAgent
     case wouldRefuseUnsupported
 }
 
@@ -402,6 +427,15 @@ public enum EvalResultWriter {
                     if let expectedInsertedText = record.expectedInsertedText {
                         lines.append("- Expected inserted text: \(inlineCode(expectedInsertedText))")
                     }
+                    if let expectedAgentProviderID = record.expectedAgentProviderID {
+                        lines.append("- Expected agent provider: `\(expectedAgentProviderID)`")
+                    }
+                    if let expectedProjectName = record.expectedProjectName {
+                        lines.append("- Expected project: `\(expectedProjectName)`")
+                    }
+                    if let expectedAgentMode = record.expectedAgentMode {
+                        lines.append("- Expected agent mode: `\(expectedAgentMode.rawValue)`")
+                    }
                 }
                 if let expectsDetailsMarkdown = record.expectsDetailsMarkdown {
                     lines.append("- Expects details Markdown: \(expectsDetailsMarkdown ? "yes" : "no")")
@@ -412,6 +446,15 @@ public enum EvalResultWriter {
                 if record.evalRole == .companionRouter {
                     lines.append("- Parsed directive: `\(record.parsedDirective?.rawValue ?? "parseFailure")`")
                     lines.append("- Dry-run action: `\(record.dryRunAction.rawValue)`")
+                    if let directiveAgentProviderID = record.directiveAgentProviderID {
+                        lines.append("- Agent provider: `\(directiveAgentProviderID)`")
+                    }
+                    if let directiveProjectName = record.directiveProjectName {
+                        lines.append("- Project: `\(directiveProjectName)`")
+                    }
+                    if let directiveAgentMode = record.directiveAgentMode {
+                        lines.append("- Agent mode: `\(directiveAgentMode.rawValue)`")
+                    }
                 }
                 lines.append("- Latency: \(record.totalMilliseconds) ms")
                 if record.criticalRoutingFailure {

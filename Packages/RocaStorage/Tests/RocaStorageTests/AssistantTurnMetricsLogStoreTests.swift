@@ -60,6 +60,29 @@ func assistantTurnMetricsLogStoreAppendsAndReadsRecentRows() async throws {
 }
 
 @Test
+func assistantDiagnosticsLogStoreAppendsAndReadsRecentRows() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("RocaDiagnosticsLogStoreTests")
+        .appendingPathComponent(UUID().uuidString)
+    let store = AssistantDiagnosticsLogStore(logsDirectory: directory)
+
+    let first = diagnostic(id: "first", kind: .turnStarted)
+    let second = diagnostic(id: "second", kind: .agentProjectLookupFailed)
+    try await store.append(first)
+    try await store.append(second)
+
+    let recent = try await store.recent(limit: 2)
+    #expect(recent.map(\.id) == ["second", "first"])
+    #expect(recent.map(\.kind) == [.agentProjectLookupFailed, .turnStarted])
+    #expect(recent.first?.metadata["errorType"] == "providerTimedOut")
+
+    let info = try await store.fileInfo()
+    #expect(info.exists)
+    #expect(info.rowCount == 2)
+    #expect(info.byteCount > 0)
+}
+
+@Test
 func chatTranscriptLogStoreHandlesMissingFiles() async throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("RocaChatTranscriptLogStoreTests")
@@ -145,5 +168,19 @@ private func metrics(id: String, totalMilliseconds: Int) -> AssistantTurnMetrics
         ttsAudioChunkCount: 1,
         capturedAudioFrameCount: 11,
         droppedAudioFrameCount: 0
+    )
+}
+
+private func diagnostic(id: String, kind: AssistantDiagnosticEventKind) -> AssistantDiagnosticEvent {
+    AssistantDiagnosticEvent(
+        id: id,
+        createdAt: Date(timeIntervalSince1970: 1),
+        turnID: BrainRequestID(rawValue: "turn-\(id)"),
+        kind: kind,
+        phase: "test",
+        providerID: ProviderID(rawValue: "codex-agent"),
+        directiveType: .runAgent,
+        outcome: "failed",
+        metadata: ["errorType": "providerTimedOut"]
     )
 }

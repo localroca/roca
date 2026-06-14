@@ -64,6 +64,38 @@ public struct BrainRequestID: RawRepresentable, Hashable, Codable, Sendable, Exp
     }
 }
 
+public struct AgentRunID: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
+    public var rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(stringLiteral value: String) {
+        self.rawValue = value
+    }
+
+    public static func make() -> AgentRunID {
+        AgentRunID(rawValue: UUID().uuidString)
+    }
+}
+
+public struct ProjectID: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
+    public var rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(stringLiteral value: String) {
+        self.rawValue = value
+    }
+
+    public static func make() -> ProjectID {
+        ProjectID(rawValue: UUID().uuidString)
+    }
+}
+
 public struct MemoryID: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
     public var rawValue: String
 

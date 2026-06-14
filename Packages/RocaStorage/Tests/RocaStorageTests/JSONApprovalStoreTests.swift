@@ -56,3 +56,27 @@ func approvalStoreRoundTripsAndRevokesApprovals() async throws {
 
     try? FileManager.default.removeItem(at: directory)
 }
+
+@Test
+func approvalStoreRoundTripsAgentApprovalScope() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("RocaApprovalStoreTests-\(UUID().uuidString)", isDirectory: true)
+    let store = JSONApprovalStore(fileURL: directory.appendingPathComponent("approvals.json"))
+    let requirement = AgentApprovalRequirement(
+        providerID: "codex-agent",
+        role: .coding,
+        mode: .act,
+        workspacePath: "/tmp/project",
+        dataScopes: [.prompt, .workspaceFiles],
+        actionScopes: [.editWorkspace, .runCommands]
+    )
+    let record = AgentApprovalGate.record(for: requirement, createdAt: Date(timeIntervalSince1970: 2_000))
+
+    try await store.save([record])
+    let loaded = try await store.load()
+
+    #expect(loaded == [record])
+    #expect(loaded.first?.agentScope?.covers(requirement) == true)
+
+    try? FileManager.default.removeItem(at: directory)
+}
