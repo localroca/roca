@@ -51,7 +51,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private var activeAgentRunID: AgentRunID?
     private var cancelledTurnIDs: Set<BrainRequestID> = []
     private var conversationMessages: [BrainMessage] = []
-    private var lastAgentContext: LastAgentContext?
+    private var lastContextPacket: AssistantContextPacket?
     private var pendingProjectClarification: PendingProjectClarification?
     private var stateContinuations: [UUID: AsyncStream<AssistantState>.Continuation] = [:]
     private var messageContinuations: [UUID: AsyncStream<[ChatMessage]>.Continuation] = [:]
@@ -316,7 +316,7 @@ public actor DefaultAssistantSessionOrchestrator {
             )
         ]
         conversationMessages = []
-        lastAgentContext = nil
+        lastContextPacket = nil
         pendingProjectClarification = nil
         publishMessages()
     }
@@ -921,17 +921,31 @@ public actor DefaultAssistantSessionOrchestrator {
                     status: .completed
                 )
             }
-            lastAgentContext = LastAgentContext(
-                providerID: providerID,
-                providerName: providerName,
-                project: resolvedProject.project
+            let contextPacket = AssistantContextPacket(
+                currentTask: AssistantAgentTaskContext(
+                    providerID: providerID,
+                    providerName: providerName,
+                    mode: directive.mode,
+                    prompt: directive.prompt,
+                    project: resolvedProject.project
+                ),
+                priorAgentResult: AssistantAgentResultContext(
+                    providerID: providerID,
+                    providerName: providerName,
+                    mode: directive.mode,
+                    project: resolvedProject.project,
+                    summary: response.bubbleText,
+                    detailsMarkdown: response.detailsMarkdown
+                ),
+                approval: AssistantApprovalContext(
+                    riskLevel: directive.mode == .act ? .high : .medium,
+                    approvalBehavior: provider.capabilities.supportsToolApprovals ? .policyDriven : .notRequired
+                )
             )
+            lastContextPacket = contextPacket
             rememberAgentResult(
                 userText: input,
-                assistantText: response.conversationText,
-                providerName: providerName,
-                project: resolvedProject.project,
-                mode: directive.mode
+                contextPacket: contextPacket
             )
             try await speak(response.bubbleText, request: request, timing: &timing)
             emitDiagnostic(
@@ -1171,23 +1185,23 @@ public actor DefaultAssistantSessionOrchestrator {
             return contextualized
         }
 
-        guard let lastAgentContext,
-              Self.shouldReuseLastAgentContext(for: userInput, directive: directive)
+        guard let agentContext = lastContextPacket?.priorAgentResult,
+              Self.shouldReusePriorAgentContext(for: userInput, directive: directive)
         else {
             return directive
         }
 
         var contextualized = directive
         if contextualized.providerID == nil, contextualized.providerName == nil {
-            contextualized.providerID = lastAgentContext.providerID
-            contextualized.providerName = lastAgentContext.providerName
+            contextualized.providerID = agentContext.providerID
+            contextualized.providerName = agentContext.providerName
         }
 
         let providerMatches = contextualized.resolvedProviderID == nil
-            || contextualized.resolvedProviderID == lastAgentContext.providerID
+            || contextualized.resolvedProviderID == agentContext.providerID
         if providerMatches,
            contextualized.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-           let project = lastAgentContext.project {
+           let project = agentContext.project {
             contextualized.projectName = project.displayName
         }
 
@@ -1531,21 +1545,9 @@ public actor DefaultAssistantSessionOrchestrator {
         trimConversationMessages()
     }
 
-    private func rememberAgentResult(
-        userText: String,
-        assistantText: String,
-        providerName: String,
-        project: ProjectIdentity?,
-        mode: AgentMode
-    ) {
+    private func rememberAgentResult(userText: String, contextPacket: AssistantContextPacket) {
         conversationMessages.append(BrainMessage(role: .user, content: userText))
-        let projectText = project.map { "\($0.displayName) at \($0.localPath)" } ?? "no specific project"
-        conversationMessages.append(
-            BrainMessage(
-                role: .assistant,
-                content: "Agent context: provider=\(providerName); mode=\(mode.rawValue); project=\(projectText).\n\(assistantText)"
-            )
-        )
+        conversationMessages.append(BrainMessage(role: .assistant, content: contextPacket.brainContextText))
         trimConversationMessages()
     }
 
@@ -2028,7 +2030,7 @@ public actor DefaultAssistantSessionOrchestrator {
         return asksForSpeech || asksForVerbalOnly
     }
 
-    private nonisolated static func shouldReuseLastAgentContext(
+    private nonisolated static func shouldReusePriorAgentContext(
         for input: String,
         directive: AgentDirectiveRequest
     ) -> Bool {
@@ -2361,12 +2363,6 @@ private struct ActiveAssistantSessionListeningSession: Sendable {
     var transcriptTask: Task<String, Error>
     var timing: AssistantTurnTimingBuilder
     var listeningMessageID: ChatMessageID
-}
-
-private struct LastAgentContext: Sendable {
-    var providerID: ProviderID
-    var providerName: String
-    var project: ProjectIdentity?
 }
 
 private struct PendingProjectClarification: Sendable {

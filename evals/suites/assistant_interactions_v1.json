@@ -182,7 +182,7 @@
             ],
             "forbiddenMessageTextContains": ["No selected text found"],
             "spokenTexts": ["Codex found two Uni Auth passkey endpoints: one to begin login and one to finish login."],
-            "memoryContains": ["/v1/auth/passkey/login/begin"]
+            "memoryContains": ["Context packet:", "/v1/auth/passkey/login/begin"]
           }
         }
       ]
@@ -293,7 +293,7 @@
                 "mode": "act"
               }
             ],
-            "memoryContains": ["routes/passkeys.ts"],
+            "memoryContains": ["Context packet:", "routes/passkeys.ts"],
             "forbiddenMessageTextContains": ["Which project should Codex use?"]
           }
         }

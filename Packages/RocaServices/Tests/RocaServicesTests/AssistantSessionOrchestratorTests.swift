@@ -618,8 +618,11 @@ func assistantSessionKeepsFormattedAgentResultInFollowUpContext() async throws {
     let followUpRequest = try #require(await brain.recordedRequests.last(where: { $0.role == .generalChat }))
     #expect(followUpRequest.messages.contains { message in
         message.role == .assistant
+            && message.content.contains("Context packet:")
+            && message.content.contains("Prior agent result:")
             && message.content.contains("POST /v1/auth/passkey/login/begin")
             && message.content.contains("Codex found 2 passkey endpoints.")
+            && !message.content.contains("Agent context:")
     })
 }
 
