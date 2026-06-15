@@ -348,6 +348,219 @@
       ]
     },
     {
+      "id": "project_clarification_resume_original_request",
+      "title": "Project clarification resumes original request",
+      "description": "After Roca asks which project the user means, a precise project answer should resume the original agent request instead of starting a new chat turn.",
+      "tags": ["agent", "project", "clarification", "interrupt-resume", "issue-28"],
+      "projects": [
+        {
+          "id": "ter-admin",
+          "displayName": "TER Admin",
+          "localPath": "/workspace/ter-admin"
+        },
+        {
+          "id": "ter-backend",
+          "displayName": "TER Backend",
+          "localPath": "/workspace/ter-backend"
+        },
+        {
+          "id": "ter-mailer",
+          "displayName": "TER Mailer",
+          "localPath": "/workspace/ter-mailer"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "README.md has 42 lines."
+      },
+      "turns": [
+        {
+          "id": "ask_ter_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+              }
+            ],
+            "agentRequestCount": 0
+          }
+        },
+        {
+          "id": "choose_backend",
+          "user": "ter backend",
+          "brain": {
+            "responseText": "{\"bubbleText\":\"Codex found the README line count.\",\"detailsMarkdown\":\"README.md has 42 lines.\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll ask Codex to inspect TER Backend and summarize what it finds."
+              },
+              {
+                "role": "assistant",
+                "text": "Codex found the README line count.",
+                "detailsContains": "README.md has 42 lines."
+              }
+            ],
+            "agentRequestCount": 1,
+            "agentRequests": [
+              {
+                "providerID": "codex-agent",
+                "workspacePath": "/workspace/ter-backend",
+                "promptContains": "README.md file",
+                "mode": "ask"
+              }
+            ],
+            "diagnostics": [
+              {
+                "kind": "directiveResolved",
+                "phase": "projectClarification",
+                "outcome": "resumed"
+              },
+              {
+                "kind": "agentRunCompleted",
+                "outcome": "completed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "project_clarification_still_ambiguous",
+      "title": "Project clarification answer is still ambiguous",
+      "description": "If the clarification answer is still ambiguous, Roca should ask again without starting the agent.",
+      "tags": ["agent", "project", "clarification", "interrupt-resume", "issue-28"],
+      "projects": [
+        {
+          "id": "ter-admin",
+          "displayName": "TER Admin",
+          "localPath": "/workspace/ter-admin"
+        },
+        {
+          "id": "ter-backend",
+          "displayName": "TER Backend",
+          "localPath": "/workspace/ter-backend"
+        },
+        {
+          "id": "ter-mailer",
+          "displayName": "TER Mailer",
+          "localPath": "/workspace/ter-mailer"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "README.md has 42 lines."
+      },
+      "turns": [
+        {
+          "id": "ask_ter_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+              }
+            ],
+            "agentRequestCount": 0
+          }
+        },
+        {
+          "id": "answer_ter",
+          "user": "ter",
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+              }
+            ],
+            "forbiddenMessageTextContains": ["Codex finished.", "README.md has 42 lines."],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "project_clarification_unrelated_follow_up",
+      "title": "Unrelated follow-up clears project clarification",
+      "description": "A short unrelated command after a project clarification should not be misread as a project answer.",
+      "tags": ["agent", "project", "clarification", "routing", "issue-28"],
+      "projects": [
+        {
+          "id": "ter-admin",
+          "displayName": "TER Admin",
+          "localPath": "/workspace/ter-admin"
+        },
+        {
+          "id": "ter-backend",
+          "displayName": "TER Backend",
+          "localPath": "/workspace/ter-backend"
+        },
+        {
+          "id": "ter-mailer",
+          "displayName": "TER Mailer",
+          "localPath": "/workspace/ter-mailer"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "README.md has 42 lines."
+      },
+      "turns": [
+        {
+          "id": "ask_ter_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+              }
+            ],
+            "agentRequestCount": 0
+          }
+        },
+        {
+          "id": "open_safari",
+          "user": "open safari",
+          "brain": {
+            "directiveJSON": "{\"type\":\"openApplication\",\"appName\":\"Safari\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "action",
+                "text": "Opened App.",
+                "status": "completed"
+              }
+            ],
+            "forbiddenMessageTextContains": ["I couldn't match that to one of the project options"],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    },
+    {
       "id": "explicit_ambiguous_project_overrides_prior_context",
       "title": "Explicit ambiguous project beats prior context",
       "description": "If recent context is Uni Auth but the user says the ter project, Roca should not reuse Uni Auth; it should discover TER matches and ask which one.",
