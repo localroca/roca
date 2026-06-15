@@ -794,6 +794,133 @@ func assistantSessionDoesNotReusePriorProjectWhenUserNamesAmbiguousProject() asy
 }
 
 @Test
+func assistantSessionResumesPendingProjectClarificationWithOriginalAgentRequest() async throws {
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"ter","prompt":"tell me how many lines the README.md file is","mode":"ask"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"Codex found the README line count.","detailsMarkdown":"README.md has 42 lines."}"###
+        ]
+    )
+    let agent = RecordingSessionAgentProvider(responseText: "README.md has 42 lines.")
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "ter-admin", displayName: "TER Admin", localPath: "/workspace/ter-admin"),
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", localPath: "/workspace/ter-backend"),
+            ProjectIdentity(id: "ter-mailer", displayName: "TER Mailer", localPath: "/workspace/ter-mailer")
+        ]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText("ter backend", request: sessionRequest(outputMode: .textOnly))
+
+    let requests = await agent.recordedRequests
+    #expect(requests.count == 1)
+    #expect(requests.first?.workspacePath == "/workspace/ter-backend")
+    #expect(requests.first?.prompt == "tell me how many lines the README.md file is")
+    #expect(requests.first?.mode == .ask)
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.text == "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+    })
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.text == "I'll ask Codex to inspect TER Backend and summarize what it finds."
+    })
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.detailsMarkdown?.contains("README.md has 42 lines.") == true
+    })
+}
+
+@Test
+func assistantSessionKeepsPendingProjectClarificationWhenAnswerIsStillAmbiguous() async throws {
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"ter","prompt":"tell me how many lines the README.md file is","mode":"ask"}"#
+        ],
+        responseTexts: []
+    )
+    let agent = RecordingSessionAgentProvider(responseText: "README.md has 42 lines.")
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "ter-admin", displayName: "TER Admin", localPath: "/workspace/ter-admin"),
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", localPath: "/workspace/ter-backend"),
+            ProjectIdentity(id: "ter-mailer", displayName: "TER Mailer", localPath: "/workspace/ter-mailer")
+        ]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText("ter", request: sessionRequest(outputMode: .textOnly))
+
+    #expect(await agent.recordedRequests.isEmpty)
+    let clarificationMessages = await orchestrator.messageSnapshot.filter {
+        $0.role == .assistant
+            && $0.text == "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+    }
+    #expect(clarificationMessages.count == 2)
+}
+
+@Test
+func assistantSessionClearsPendingProjectClarificationForUnrelatedShortCommand() async throws {
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"ter","prompt":"tell me how many lines the README.md file is","mode":"ask"}"#,
+            #"{"type":"openApplication","appName":"Safari"}"#
+        ],
+        responseTexts: []
+    )
+    let agent = RecordingSessionAgentProvider(responseText: "README.md has 42 lines.")
+    let appCommands = RecordingSessionAppCommands()
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        applicationCommands: appCommands,
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "ter-admin", displayName: "TER Admin", localPath: "/workspace/ter-admin"),
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", localPath: "/workspace/ter-backend"),
+            ProjectIdentity(id: "ter-mailer", displayName: "TER Mailer", localPath: "/workspace/ter-mailer")
+        ]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText("open safari", request: sessionRequest(outputMode: .textOnly))
+
+    #expect(await agent.recordedRequests.isEmpty)
+    #expect(await appCommands.commands.count == 1)
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .action && $0.text == "Opened App." })
+}
+
+@Test
 func assistantSessionClarifiesOtherProjectCorrectionsWithoutExcludedProject() async throws {
     let brain = ScriptedSessionBrainProvider(
         directiveJSON: #"{"type":"runAgent","providerID":"codex-agent","providerName":"Codex","projectName":"ter project","prompt":"how many lines are in the README.md","mode":"ask"}"#,

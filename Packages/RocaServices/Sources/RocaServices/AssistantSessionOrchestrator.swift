@@ -52,6 +52,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private var cancelledTurnIDs: Set<BrainRequestID> = []
     private var conversationMessages: [BrainMessage] = []
     private var lastAgentContext: LastAgentContext?
+    private var pendingProjectClarification: PendingProjectClarification?
     private var stateContinuations: [UUID: AsyncStream<AssistantState>.Continuation] = [:]
     private var messageContinuations: [UUID: AsyncStream<[ChatMessage]>.Continuation] = [:]
     private var metricsContinuations: [UUID: AsyncStream<AssistantTurnMetrics>.Continuation] = [:]
@@ -316,6 +317,7 @@ public actor DefaultAssistantSessionOrchestrator {
         ]
         conversationMessages = []
         lastAgentContext = nil
+        pendingProjectClarification = nil
         publishMessages()
     }
 
@@ -389,6 +391,27 @@ public actor DefaultAssistantSessionOrchestrator {
             activeBrainRequestID = request.turnID
 
             timing.directiveStartedAt = Date()
+            if try await handlePendingProjectClarificationIfNeeded(
+                input: input,
+                request: request,
+                context: context,
+                brainProvider: brainProvider,
+                timing: &timing
+            ) {
+                if timing.directiveFinishedAt == nil {
+                    timing.directiveFinishedAt = Date()
+                }
+                emitDiagnostic(
+                    kind: .turnCompleted,
+                    turnID: request.turnID,
+                    phase: "finish",
+                    directiveType: timing.directiveType,
+                    outcome: AssistantTurnOutcome.completed.rawValue,
+                    metadata: diagnosticMetadata(for: request)
+                )
+                emitMetrics(timing.snapshot(outcome: .completed))
+                return
+            }
             let directive = try await resolveDirective(
                 input: input,
                 request: request,
@@ -494,6 +517,91 @@ public actor DefaultAssistantSessionOrchestrator {
                 return repaired
             }
             throw AssistantRoutingRecoveryError()
+        }
+    }
+
+    private func handlePendingProjectClarificationIfNeeded(
+        input: String,
+        request: AssistantSessionTurnRequest,
+        context: AssistantLocalContext,
+        brainProvider: any BrainProvider,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> Bool {
+        guard let pending = pendingProjectClarification else {
+            return false
+        }
+
+        if Self.isProjectClarificationCancellation(input) {
+            pendingProjectClarification = nil
+            timing.directiveType = .runAgent
+            timing.directiveFinishedAt = Date()
+            let message = "No problem, I won't hand that to \(pending.providerName)."
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing)
+            return true
+        }
+
+        switch Self.projectClarificationResolution(input: input, candidates: pending.candidates) {
+        case .resolved(let project):
+            pendingProjectClarification = nil
+            var directive = pending.directive
+            directive.projectName = project.displayName
+            timing.directiveType = .runAgent
+            timing.directiveFinishedAt = Date()
+            emitDiagnostic(
+                kind: .directiveResolved,
+                turnID: request.turnID,
+                phase: "projectClarification",
+                providerID: pending.providerID,
+                directiveType: .runAgent,
+                outcome: "resumed",
+                metadata: diagnosticMetadata(
+                    for: request,
+                    extra: [
+                        "clarificationTurnID": pending.createdTurnID.rawValue,
+                        "questionMessageID": pending.questionMessageID.rawValue,
+                        "projectQuery": pending.query,
+                        "projectID": project.id.rawValue,
+                        "projectName": project.displayName
+                    ]
+                )
+            )
+            try await handleAgentDirective(
+                directive,
+                input: pending.originalUserInput,
+                request: request,
+                context: context,
+                brainProvider: brainProvider,
+                timing: &timing,
+                resolvedProjectOverride: project
+            )
+            return true
+        case .ambiguous(_, let candidates):
+            pendingProjectClarification?.candidates = candidates
+            timing.directiveType = .runAgent
+            timing.directiveFinishedAt = Date()
+            let message = Self.projectClarificationQuestion(for: candidates)
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing)
+            return true
+        case .missing:
+            guard Self.looksLikeProjectClarificationAnswer(input, candidates: pending.candidates) else {
+                pendingProjectClarification = nil
+                return false
+            }
+            timing.directiveType = .runAgent
+            timing.directiveFinishedAt = Date()
+            let names = pending.candidates.map(\.displayName).joined(separator: ", ")
+            let message = "I couldn't match that to one of the project options. Which project do you mean: \(names)?"
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing)
+            return true
         }
     }
 
@@ -625,7 +733,8 @@ public actor DefaultAssistantSessionOrchestrator {
         request: AssistantSessionTurnRequest,
         context: AssistantLocalContext,
         brainProvider: any BrainProvider,
-        timing: inout AssistantTurnTimingBuilder
+        timing: inout AssistantTurnTimingBuilder,
+        resolvedProjectOverride: ProjectIdentity? = nil
     ) async throws {
         try checkTurnStillActive(request.turnID)
         let providerName = directive.providerDisplayName
@@ -660,14 +769,19 @@ public actor DefaultAssistantSessionOrchestrator {
             return
         }
 
-        let resolvedProject = try await resolveProject(
-            for: directive,
-            userInput: input,
-            providerName: providerName,
-            provider: provider,
-            request: request,
-            timing: &timing
-        )
+        let resolvedProject: (project: ProjectIdentity?, shouldContinue: Bool)
+        if let resolvedProjectOverride {
+            resolvedProject = (resolvedProjectOverride, true)
+        } else {
+            resolvedProject = try await resolveProject(
+                for: directive,
+                userInput: input,
+                providerName: providerName,
+                provider: provider,
+                request: request,
+                timing: &timing
+            )
+        }
         try Task.checkCancellation()
         try checkTurnStillActive(request.turnID)
         guard resolvedProject.shouldContinue else {
@@ -899,10 +1013,17 @@ public actor DefaultAssistantSessionOrchestrator {
                 return (project, true)
             }
         case .ambiguous(_, let candidates):
-            let names = candidates.map(\.displayName).joined(separator: ", ")
-            let message = "Which project do you mean: \(names)?"
+            let message = Self.projectClarificationQuestion(for: candidates)
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
+            storePendingProjectClarification(
+                directive: directive,
+                originalUserInput: userInput,
+                query: projectName,
+                candidates: candidates,
+                questionMessageID: id,
+                request: request
+            )
             rememberAssistantObservation(message)
             try await speak(message, request: request, timing: &timing)
             return (nil, false)
@@ -947,10 +1068,17 @@ public actor DefaultAssistantSessionOrchestrator {
                     return (project, true)
                 case .ambiguous(_, let candidates):
                     completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
-                    let names = candidates.map(\.displayName).joined(separator: ", ")
-                    let message = "Which project do you mean: \(names)?"
+                    let message = Self.projectClarificationQuestion(for: candidates)
                     let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
                     completeMessage(id, text: message, status: .completed)
+                    storePendingProjectClarification(
+                        directive: directive,
+                        originalUserInput: userInput,
+                        query: projectName,
+                        candidates: candidates,
+                        questionMessageID: id,
+                        request: request
+                    )
                     rememberAssistantObservation(message)
                     emitDiagnostic(
                         kind: .agentProjectLookupCompleted,
@@ -1011,6 +1139,26 @@ public actor DefaultAssistantSessionOrchestrator {
         rememberAssistantObservation(message)
         try await speak(message, request: request, timing: &timing)
         return (nil, false)
+    }
+
+    private func storePendingProjectClarification(
+        directive: AgentDirectiveRequest,
+        originalUserInput: String,
+        query: String,
+        candidates: [ProjectIdentity],
+        questionMessageID: ChatMessageID,
+        request: AssistantSessionTurnRequest
+    ) {
+        pendingProjectClarification = PendingProjectClarification(
+            directive: directive,
+            originalUserInput: originalUserInput,
+            query: query,
+            candidates: candidates,
+            providerID: directive.resolvedProviderID,
+            providerName: directive.providerDisplayName,
+            createdTurnID: request.turnID,
+            questionMessageID: questionMessageID
+        )
     }
 
     private func contextualizedAgentDirective(
@@ -1131,6 +1279,89 @@ public actor DefaultAssistantSessionOrchestrator {
         return projects
             .filter { seen.insert(ProjectIdentityResolver.normalizedKey($0.localPath)).inserted }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private static func projectClarificationQuestion(for candidates: [ProjectIdentity]) -> String {
+        let names = candidates.map(\.displayName).joined(separator: ", ")
+        return "Which project do you mean: \(names)?"
+    }
+
+    private static func projectClarificationResolution(
+        input: String,
+        candidates: [ProjectIdentity]
+    ) -> ProjectResolution {
+        ProjectIdentityResolver(projects: candidates).resolve(projectClarificationQuery(from: input))
+    }
+
+    private static func projectClarificationQuery(from input: String) -> String {
+        let fillerWords = Set([
+            "a",
+            "an",
+            "choose",
+            "go",
+            "i",
+            "it",
+            "mean",
+            "no",
+            "one",
+            "please",
+            "project",
+            "repo",
+            "repository",
+            "select",
+            "that",
+            "the",
+            "use",
+            "with",
+            "yeah",
+            "yep",
+            "yes"
+        ])
+        let tokens = ProjectIdentityResolver.normalizedKey(input)
+            .split(separator: " ")
+            .map(String.init)
+            .filter { !fillerWords.contains($0) }
+        return tokens.joined(separator: " ")
+    }
+
+    private static func isProjectClarificationCancellation(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        return [
+            "cancel",
+            "cancel that",
+            "forget it",
+            "never mind",
+            "nevermind",
+            "stop",
+            "skip it"
+        ].contains(normalized)
+    }
+
+    private static func looksLikeProjectClarificationAnswer(_ input: String, candidates: [ProjectIdentity]) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        guard !normalized.isEmpty else {
+            return false
+        }
+        if normalized.hasPrefix("what ")
+            || normalized.hasPrefix("why ")
+            || normalized.hasPrefix("how ")
+            || normalized.hasPrefix("can ")
+            || normalized.hasPrefix("could ")
+            || normalized.hasPrefix("tell ")
+            || normalized.hasPrefix("ask ") {
+            return false
+        }
+        guard normalized.split(separator: " ").count <= 5 else {
+            return false
+        }
+        let queryTokens = Set(projectClarificationQuery(from: input).split(separator: " ").map(String.init))
+        guard !queryTokens.isEmpty else {
+            return false
+        }
+        let candidateTokens = Set(candidates.flatMap { project in
+            project.searchNames.flatMap { ProjectIdentityResolver.normalizedKey($0).split(separator: " ").map(String.init) }
+        })
+        return !queryTokens.isDisjoint(with: candidateTokens)
     }
 
     private func completeAssistantResponse(
@@ -2136,6 +2367,17 @@ private struct LastAgentContext: Sendable {
     var providerID: ProviderID
     var providerName: String
     var project: ProjectIdentity?
+}
+
+private struct PendingProjectClarification: Sendable {
+    var directive: AgentDirectiveRequest
+    var originalUserInput: String
+    var query: String
+    var candidates: [ProjectIdentity]
+    var providerID: ProviderID?
+    var providerName: String
+    var createdTurnID: BrainRequestID
+    var questionMessageID: ChatMessageID
 }
 
 private extension AssistantDirective {
