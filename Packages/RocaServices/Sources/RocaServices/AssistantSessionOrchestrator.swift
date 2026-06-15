@@ -51,6 +51,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private var activeAgentRunID: AgentRunID?
     private var cancelledTurnIDs: Set<BrainRequestID> = []
     private var conversationMessages: [BrainMessage] = []
+    private var lastAgentContext: LastAgentContext?
     private var stateContinuations: [UUID: AsyncStream<AssistantState>.Continuation] = [:]
     private var messageContinuations: [UUID: AsyncStream<[ChatMessage]>.Continuation] = [:]
     private var metricsContinuations: [UUID: AsyncStream<AssistantTurnMetrics>.Continuation] = [:]
@@ -314,6 +315,7 @@ public actor DefaultAssistantSessionOrchestrator {
             )
         ]
         conversationMessages = []
+        lastAgentContext = nil
         publishMessages()
     }
 
@@ -467,6 +469,9 @@ public actor DefaultAssistantSessionOrchestrator {
         context: AssistantLocalContext,
         provider: any BrainProvider
     ) async throws -> AssistantDirective {
+        if Self.shouldAnswerFromConversation(input) {
+            return .respond
+        }
         let brainRequest = BrainRequest(
             requestID: request.turnID,
             messages: directiveMessages(input: input, context: context),
@@ -482,7 +487,14 @@ public actor DefaultAssistantSessionOrchestrator {
         )
         let events = try await provider.complete(brainRequest)
         let response = try await Self.finalBrainText(from: events)
-        return try AssistantPromptCatalog.parseDirective(response)
+        do {
+            return try AssistantPromptCatalog.parseDirective(response)
+        } catch {
+            if let repaired = Self.repairedDirective(from: response) {
+                return repaired
+            }
+            throw AssistantRoutingRecoveryError()
+        }
     }
 
     private func directiveMessages(input: String, context: AssistantLocalContext) -> [BrainMessage] {
@@ -593,7 +605,7 @@ public actor DefaultAssistantSessionOrchestrator {
             }
         case .runAgent(let agentRequest):
             try await handleAgentDirective(
-                agentRequest,
+                contextualizedAgentDirective(agentRequest, userInput: input),
                 input: input,
                 request: request,
                 context: context,
@@ -650,6 +662,7 @@ public actor DefaultAssistantSessionOrchestrator {
 
         let resolvedProject = try await resolveProject(
             for: directive,
+            userInput: input,
             providerName: providerName,
             provider: provider,
             request: request,
@@ -661,9 +674,10 @@ public actor DefaultAssistantSessionOrchestrator {
             return
         }
 
-        let intro = Self.agentIntroText(providerName: providerName, project: resolvedProject.project)
+        let intro = Self.agentIntroText(providerName: providerName, project: resolvedProject.project, mode: directive.mode)
         let introID = appendAssistantMessage(intro, status: .completed, request: request, directiveType: .runAgent)
         completeMessage(introID, text: intro, status: .completed)
+        try await speak(intro, request: request, timing: &timing, finishWhenDone: false)
 
         setState(.acting("Interacting with \(providerName)"))
         let actionID = appendActionMessage("Interacting with \(providerName)...", status: .streaming, request: request, directiveType: .runAgent)
@@ -740,7 +754,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 directiveType: .runAgent,
                 brainRole: .generalChat
             )
-            let response: AssistantResponseContent
+            var response: AssistantResponseContent
             if rawAgentText.isEmpty {
                 response = AssistantResponseContent(
                     bubbleText: "\(providerName) finished, but I didn't get any details back.",
@@ -779,6 +793,12 @@ public actor DefaultAssistantSessionOrchestrator {
                         metadata: diagnosticMetadata(for: request, error: error)
                     )
                 }
+                response = Self.normalizedAgentResponse(
+                    response,
+                    providerName: providerName,
+                    mode: directive.mode,
+                    rawAgentText: rawAgentText
+                )
                 try checkTurnStillActive(request.turnID)
                 completeMessage(
                     assistantMessageID,
@@ -787,7 +807,18 @@ public actor DefaultAssistantSessionOrchestrator {
                     status: .completed
                 )
             }
-            remember(userText: input, assistantText: response.conversationText)
+            lastAgentContext = LastAgentContext(
+                providerID: providerID,
+                providerName: providerName,
+                project: resolvedProject.project
+            )
+            rememberAgentResult(
+                userText: input,
+                assistantText: response.conversationText,
+                providerName: providerName,
+                project: resolvedProject.project,
+                mode: directive.mode
+            )
             try await speak(response.bubbleText, request: request, timing: &timing)
             emitDiagnostic(
                 kind: .agentRunCompleted,
@@ -842,6 +873,7 @@ public actor DefaultAssistantSessionOrchestrator {
 
     private func resolveProject(
         for directive: AgentDirectiveRequest,
+        userInput: String,
         providerName: String,
         provider: any AgentProvider,
         request: AssistantSessionTurnRequest,
@@ -853,11 +885,19 @@ public actor DefaultAssistantSessionOrchestrator {
             return (nil, true)
         }
 
-        let projects = try await projectCatalog?.projects() ?? []
+        let excludedProjectNames = Self.excludedProjectNames(from: userInput)
+        let allProjects = try await projectCatalog?.projects() ?? []
+        let projects = allProjects.filter { !Self.project($0, matchesAny: excludedProjectNames) }
         try checkTurnStillActive(request.turnID)
+        var broadLocalMatch: ProjectIdentity?
         switch ProjectIdentityResolver(projects: projects).resolve(projectName) {
         case .resolved(let project):
-            return (project, true)
+            if Self.shouldVerifyBroadProjectResolution(query: projectName, resolvedProject: project),
+               provider is any AgentProjectDiscovering {
+                broadLocalMatch = project
+            } else {
+                return (project, true)
+            }
         case .ambiguous(_, let candidates):
             let names = candidates.map(\.displayName).joined(separator: ", ")
             let message = "Which project do you mean: \(names)?"
@@ -867,103 +907,153 @@ public actor DefaultAssistantSessionOrchestrator {
             try await speak(message, request: request, timing: &timing)
             return (nil, false)
         case .missing:
-            if let discoverer = provider as? any AgentProjectDiscovering {
-                let lookupID = appendActionMessage("Looking for \(projectName) in \(providerName)...", status: .pending, request: request, directiveType: .runAgent)
-                emitDiagnostic(
-                    kind: .agentProjectLookupStarted,
-                    turnID: request.turnID,
-                    phase: "projectLookup",
-                    providerID: directive.resolvedProviderID,
-                    directiveType: .runAgent,
-                    metadata: diagnosticMetadata(for: request, extra: ["projectQueryPresent": "true"])
+            break
+        }
+
+        if let discoverer = provider as? any AgentProjectDiscovering {
+            let lookupID = appendActionMessage("Looking for \(projectName) in \(providerName)...", status: .pending, request: request, directiveType: .runAgent)
+            emitDiagnostic(
+                kind: .agentProjectLookupStarted,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                providerID: directive.resolvedProviderID,
+                directiveType: .runAgent,
+                metadata: diagnosticMetadata(for: request, extra: ["projectQueryPresent": "true"])
+            )
+            do {
+                let candidates = try await discoverer.discoverProjects(
+                    matching: ProjectDiscoveryQuery(projectName: projectName, prompt: directive.prompt)
                 )
-                do {
-                    let candidates = try await discoverer.discoverProjects(
-                        matching: ProjectDiscoveryQuery(projectName: projectName, prompt: directive.prompt)
-                    )
+                try checkTurnStillActive(request.turnID)
+                switch Self.discoveryResolution(
+                    for: candidates,
+                    query: projectName,
+                    excluding: excludedProjectNames
+                ) {
+                case .resolved(let project):
+                    try? await projectWriter?.upsert(project)
                     try checkTurnStillActive(request.turnID)
-                    switch Self.discoveryResolution(for: candidates, query: projectName) {
-                    case .resolved(let project):
-                        try? await projectWriter?.upsert(project)
-                        try checkTurnStillActive(request.turnID)
-                        completeMessage(lookupID, text: "Found \(project.displayName).", status: .completed)
-                        rememberAssistantObservation("Found \(project.displayName) in \(providerName).")
-                        emitDiagnostic(
-                            kind: .agentProjectLookupCompleted,
-                            turnID: request.turnID,
-                            phase: "projectLookup",
-                            providerID: directive.resolvedProviderID,
-                            directiveType: .runAgent,
-                            outcome: "resolved",
-                            metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
-                        )
-                        return (project, true)
-                    case .ambiguous(_, let candidates):
-                        completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
-                        let names = candidates.map(\.displayName).joined(separator: ", ")
-                        let message = "Which project do you mean: \(names)?"
-                        let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
-                        completeMessage(id, text: message, status: .completed)
-                        rememberAssistantObservation(message)
-                        emitDiagnostic(
-                            kind: .agentProjectLookupCompleted,
-                            turnID: request.turnID,
-                            phase: "projectLookup",
-                            providerID: directive.resolvedProviderID,
-                            directiveType: .runAgent,
-                            outcome: "ambiguous",
-                            metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
-                        )
-                        try await speak(message, request: request, timing: &timing)
-                        return (nil, false)
-                    case .missing:
-                        completeMessage(lookupID, text: "No \(providerName) project match found.", status: .completed)
-                        emitDiagnostic(
-                            kind: .agentProjectLookupCompleted,
-                            turnID: request.turnID,
-                            phase: "projectLookup",
-                            providerID: directive.resolvedProviderID,
-                            directiveType: .runAgent,
-                            outcome: "missing",
-                            metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
-                        )
-                        break
-                    }
-                } catch {
-                    completeMessage(lookupID, text: "\(providerName) project lookup failed.", status: .failed)
+                    completeMessage(lookupID, text: "Found \(project.displayName).", status: .completed)
+                    rememberAssistantObservation("Found \(project.displayName) in \(providerName).")
                     emitDiagnostic(
-                        kind: .agentProjectLookupFailed,
+                        kind: .agentProjectLookupCompleted,
                         turnID: request.turnID,
                         phase: "projectLookup",
                         providerID: directive.resolvedProviderID,
                         directiveType: .runAgent,
-                        outcome: AssistantTurnOutcome.failed.rawValue,
-                        metadata: diagnosticMetadata(for: request, error: error, extra: ["projectQueryPresent": "true"])
+                        outcome: "resolved",
+                        metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
                     )
-                    // Discovery is a convenience fallback. If it fails, ask for the folder.
-                    let message = "I couldn't read \(providerName)'s project list in time, so I don't know the \(projectName) project folder yet. Please give me the local folder or try again."
+                    return (project, true)
+                case .ambiguous(_, let candidates):
+                    completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
+                    let names = candidates.map(\.displayName).joined(separator: ", ")
+                    let message = "Which project do you mean: \(names)?"
                     let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
                     completeMessage(id, text: message, status: .completed)
                     rememberAssistantObservation(message)
+                    emitDiagnostic(
+                        kind: .agentProjectLookupCompleted,
+                        turnID: request.turnID,
+                        phase: "projectLookup",
+                        providerID: directive.resolvedProviderID,
+                        directiveType: .runAgent,
+                        outcome: "ambiguous",
+                        metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                    )
                     try await speak(message, request: request, timing: &timing)
                     return (nil, false)
+                case .missing:
+                    completeMessage(lookupID, text: "No \(providerName) project match found.", status: .completed)
+                    emitDiagnostic(
+                        kind: .agentProjectLookupCompleted,
+                        turnID: request.turnID,
+                        phase: "projectLookup",
+                        providerID: directive.resolvedProviderID,
+                        directiveType: .runAgent,
+                        outcome: "missing",
+                        metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                    )
                 }
+            } catch {
+                completeMessage(lookupID, text: "\(providerName) project lookup failed.", status: .failed)
+                emitDiagnostic(
+                    kind: .agentProjectLookupFailed,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    providerID: directive.resolvedProviderID,
+                    directiveType: .runAgent,
+                    outcome: AssistantTurnOutcome.failed.rawValue,
+                    metadata: diagnosticMetadata(for: request, error: error, extra: ["projectQueryPresent": "true"])
+                )
+                // Discovery is a convenience fallback. If it fails, ask for the folder.
+                let message = "I couldn't read \(providerName)'s project list in time, so I don't know the \(projectName) project folder yet. Please give me the local folder or try again."
+                let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+                completeMessage(id, text: message, status: .completed)
+                rememberAssistantObservation(message)
+                try await speak(message, request: request, timing: &timing)
+                return (nil, false)
             }
-            let message = "I don't know the \(projectName) project folder yet. Please give me the local folder before I hand this to \(providerName)."
+        }
+
+        if let broadLocalMatch {
+            let message = "I only know \(broadLocalMatch.displayName) for \(projectName). Please name the project more exactly before I hand this to \(providerName)."
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
             try await speak(message, request: request, timing: &timing)
             return (nil, false)
         }
+
+        let message = "I don't know the \(projectName) project folder yet. Please give me the local folder before I hand this to \(providerName)."
+        let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+        completeMessage(id, text: message, status: .completed)
+        rememberAssistantObservation(message)
+        try await speak(message, request: request, timing: &timing)
+        return (nil, false)
+    }
+
+    private func contextualizedAgentDirective(
+        _ directive: AgentDirectiveRequest,
+        userInput: String
+    ) -> AgentDirectiveRequest {
+        if let explicitProjectName = Self.explicitProjectName(from: userInput) {
+            var contextualized = directive
+            contextualized.projectName = explicitProjectName
+            return contextualized
+        }
+
+        guard let lastAgentContext,
+              Self.shouldReuseLastAgentContext(for: userInput, directive: directive)
+        else {
+            return directive
+        }
+
+        var contextualized = directive
+        if contextualized.providerID == nil, contextualized.providerName == nil {
+            contextualized.providerID = lastAgentContext.providerID
+            contextualized.providerName = lastAgentContext.providerName
+        }
+
+        let providerMatches = contextualized.resolvedProviderID == nil
+            || contextualized.resolvedProviderID == lastAgentContext.providerID
+        if providerMatches,
+           contextualized.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+           let project = lastAgentContext.project {
+            contextualized.projectName = project.displayName
+        }
+
+        return contextualized
     }
 
     private static func discoveryResolution(
         for candidates: [ProjectDiscoveryCandidate],
-        query: String
+        query: String,
+        excluding excludedProjectNames: [String] = []
     ) -> ProjectResolution {
         let usable = candidates
             .filter { $0.confidence != .low }
+            .filter { !project($0.project, matchesAny: excludedProjectNames) }
             .sorted {
                 if $0.score != $1.score {
                     return $0.score > $1.score
@@ -973,10 +1063,67 @@ public actor DefaultAssistantSessionOrchestrator {
         guard let best = usable.first else {
             return .missing(query: query)
         }
+        let broadMatches = broadDiscoveryMatches(for: query, candidates: usable)
+        if broadMatches.count > 1 {
+            return .ambiguous(query: query, candidates: broadMatches)
+        }
         if let runnerUp = usable.dropFirst().first, best.score - runnerUp.score < 25 {
             return .ambiguous(query: query, candidates: uniqueProjects(usable.map(\.project)))
         }
         return .resolved(best.project)
+    }
+
+    private static func shouldVerifyBroadProjectResolution(
+        query: String,
+        resolvedProject: ProjectIdentity
+    ) -> Bool {
+        let normalizedQuery = ProjectIdentityResolver.normalizedKey(query)
+        let queryTokens = normalizedQuery.split(separator: " ")
+        guard queryTokens.count == 1, let queryToken = queryTokens.first, queryToken.count <= 4 else {
+            return false
+        }
+        let names = intrinsicSearchNames(for: resolvedProject)
+        let hasExactIntrinsicName = names.contains { ProjectIdentityResolver.normalizedKey($0) == normalizedQuery }
+        guard !hasExactIntrinsicName else {
+            return false
+        }
+        let token = String(queryToken)
+        return names.contains { broadProjectNameMatches(queryToken: token, name: $0) }
+    }
+
+    private static func broadDiscoveryMatches(
+        for query: String,
+        candidates: [ProjectDiscoveryCandidate]
+    ) -> [ProjectIdentity] {
+        let normalizedQuery = ProjectIdentityResolver.normalizedKey(query)
+        let queryTokens = normalizedQuery.split(separator: " ")
+        guard queryTokens.count == 1, let queryToken = queryTokens.first, queryToken.count <= 4 else {
+            return []
+        }
+        let token = String(queryToken)
+        return uniqueProjects(candidates.compactMap { candidate in
+            intrinsicSearchNames(for: candidate.project).contains { name in
+                broadProjectNameMatches(queryToken: token, name: name)
+            } ? candidate.project : nil
+        })
+    }
+
+    private static func intrinsicSearchNames(for project: ProjectIdentity) -> [String] {
+        [project.displayName, project.localFolderName, project.gitRemoteName].compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed?.isEmpty == false ? trimmed : nil
+        }
+    }
+
+    private static func broadProjectNameMatches(queryToken: String, name: String) -> Bool {
+        let normalizedName = ProjectIdentityResolver.normalizedKey(name)
+        guard !normalizedName.isEmpty else {
+            return false
+        }
+        if normalizedName == queryToken || normalizedName.hasPrefix("\(queryToken) ") {
+            return true
+        }
+        return normalizedName.split(separator: " ").contains { $0.hasPrefix(queryToken) }
     }
 
     private static func uniqueProjects(_ projects: [ProjectIdentity]) -> [ProjectIdentity] {
@@ -1043,19 +1190,26 @@ public actor DefaultAssistantSessionOrchestrator {
         _ text: String,
         request: AssistantSessionTurnRequest,
         timing: inout AssistantTurnTimingBuilder,
-        force: Bool = false
+        force: Bool = false,
+        finishWhenDone: Bool = true
     ) async throws {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.speechText(from: text)
         guard !trimmed.isEmpty else {
-            await finishTurn(request)
+            if finishWhenDone {
+                await finishTurn(request)
+            }
             return
         }
         guard request.outputMode != .textOnly else {
-            await finishTurn(request)
+            if finishWhenDone {
+                await finishTurn(request)
+            }
             return
         }
         guard force || shouldSpeak(trimmed, outputMode: request.outputMode) else {
-            await finishTurn(request)
+            if finishWhenDone {
+                await finishTurn(request)
+            }
             return
         }
 
@@ -1086,7 +1240,9 @@ public actor DefaultAssistantSessionOrchestrator {
             timing.recordTTSPlayback(from: preparationFinishedAt, to: Date())
             try Task.checkCancellation()
         }
-        await finishTurn(request)
+        if finishWhenDone {
+            await finishTurn(request)
+        }
     }
 
     private func finishTurn(_ request: AssistantSessionTurnRequest) async {
@@ -1141,6 +1297,24 @@ public actor DefaultAssistantSessionOrchestrator {
     private func remember(userText: String, assistantText: String) {
         conversationMessages.append(BrainMessage(role: .user, content: userText))
         conversationMessages.append(BrainMessage(role: .assistant, content: assistantText))
+        trimConversationMessages()
+    }
+
+    private func rememberAgentResult(
+        userText: String,
+        assistantText: String,
+        providerName: String,
+        project: ProjectIdentity?,
+        mode: AgentMode
+    ) {
+        conversationMessages.append(BrainMessage(role: .user, content: userText))
+        let projectText = project.map { "\($0.displayName) at \($0.localPath)" } ?? "no specific project"
+        conversationMessages.append(
+            BrainMessage(
+                role: .assistant,
+                content: "Agent context: provider=\(providerName); mode=\(mode.rawValue); project=\(projectText).\n\(assistantText)"
+            )
+        )
         trimConversationMessages()
     }
 
@@ -1593,6 +1767,179 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
+    private nonisolated static func shouldAnswerFromConversation(_ input: String) -> Bool {
+        let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else {
+            return false
+        }
+        if normalized.contains("selected text")
+            || normalized.contains("highlighted text")
+            || normalized.contains("current selection") {
+            return false
+        }
+        if normalized.contains("codex")
+            || normalized.contains("claude")
+            || normalized.contains("cursor") {
+            return false
+        }
+
+        let asksForSpeech = normalized.contains("out loud")
+            || normalized.contains("say it")
+            || normalized.contains("say that")
+            || normalized.contains("read it")
+            || normalized.contains("read that")
+            || normalized.contains("tell it")
+            || normalized.contains("tell that")
+        let asksForVerbalOnly = normalized.contains("don't print")
+            || normalized.contains("dont print")
+            || normalized.contains("not just print")
+            || normalized.contains("not print")
+        return asksForSpeech || asksForVerbalOnly
+    }
+
+    private nonisolated static func shouldReuseLastAgentContext(
+        for input: String,
+        directive: AgentDirectiveRequest
+    ) -> Bool {
+        guard directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+              explicitProjectName(from: input) == nil
+        else {
+            return false
+        }
+        if directive.mode != .ask {
+            return true
+        }
+        let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return [
+            "there",
+            "same project",
+            "same repo",
+            "same codebase",
+            "that project",
+            "that repo",
+            "that file",
+            "those files",
+            "in it",
+            "for it",
+            "follow up",
+            "continue"
+        ].contains { normalized.contains($0) }
+    }
+
+    private nonisolated static func explicitProjectName(from input: String) -> String? {
+        let patterns = [
+            #"\b(?:other|another)\s+([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#,
+            #"\b(?:in|for|from|inside|within)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#,
+            #"\b(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#
+        ]
+        for pattern in patterns {
+            for match in regexCaptures(in: input, pattern: pattern) {
+                guard !isNegatedProjectPhrase(match.value, in: input, captureRange: match.range),
+                      let cleaned = cleanProjectPhrase(match.value)
+                else {
+                    continue
+                }
+                return cleaned
+            }
+        }
+        return nil
+    }
+
+    private nonisolated static func firstRegexCapture(in input: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(input.startIndex..<input.endIndex, in: input)
+        guard let match = regex.firstMatch(in: input, range: range),
+              match.numberOfRanges > 1,
+              let captureRange = Range(match.range(at: 1), in: input)
+        else {
+            return nil
+        }
+        return String(input[captureRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated static func regexCaptures(
+        in input: String,
+        pattern: String
+    ) -> [(value: String, range: Range<String.Index>)] {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        let range = NSRange(input.startIndex..<input.endIndex, in: input)
+        return regex.matches(in: input, range: range).compactMap { match in
+            guard match.numberOfRanges > 1,
+                  let captureRange = Range(match.range(at: 1), in: input)
+            else {
+                return nil
+            }
+            return (String(input[captureRange]).trimmingCharacters(in: .whitespacesAndNewlines), captureRange)
+        }
+    }
+
+    private nonisolated static func cleanProjectPhrase(_ phrase: String) -> String? {
+        var words = phrase.split(separator: " ").map(String.init)
+        let contextualWords = Set(["current", "same", "that", "this", "the", "a", "an", "different", "other", "another"])
+        while let first = words.first,
+              contextualWords.contains(ProjectIdentityResolver.normalizedKey(first)) {
+            words.removeFirst()
+        }
+        let cleaned = words.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return isUsableProjectPhrase(cleaned) ? cleaned : nil
+    }
+
+    private nonisolated static func isNegatedProjectPhrase(
+        _ phrase: String,
+        in input: String,
+        captureRange: Range<String.Index>
+    ) -> Bool {
+        let prefix = input[..<captureRange.lowerBound].suffix(12)
+        let normalizedPrefix = ProjectIdentityResolver.normalizedKey(String(prefix))
+        return normalizedPrefix == "not" || normalizedPrefix.hasSuffix(" not")
+    }
+
+    private nonisolated static func isUsableProjectPhrase(_ phrase: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(phrase)
+        guard !normalized.isEmpty else {
+            return false
+        }
+        let contextualWords = Set(["current", "same", "that", "this", "the", "a", "an", "different", "other"])
+        let tokens = normalized.split(separator: " ").map(String.init)
+        return !tokens.contains { contextualWords.contains($0) }
+    }
+
+    private nonisolated static func excludedProjectNames(from input: String) -> [String] {
+        let pattern = #"\bnot\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#
+        return regexCaptures(in: input, pattern: pattern).compactMap { cleanProjectPhrase($0.value) }
+    }
+
+    private nonisolated static func project(_ project: ProjectIdentity, matchesAny rawNames: [String]) -> Bool {
+        rawNames.contains { rawName in
+            let normalizedName = ProjectIdentityResolver.normalizedKey(rawName)
+            guard !normalizedName.isEmpty else {
+                return false
+            }
+            return intrinsicSearchNames(for: project).contains { name in
+                let normalizedProjectName = ProjectIdentityResolver.normalizedKey(name)
+                return normalizedProjectName == normalizedName
+                    || normalizedProjectName.hasPrefix("\(normalizedName) ")
+                    || normalizedProjectName.split(separator: " ").contains { $0 == normalizedName }
+            }
+        }
+    }
+
+    private nonisolated static func repairedDirective(from rawText: String) -> AssistantDirective? {
+        let normalized = rawText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "respond":
+            return .respond
+        case "readselection", "read_selection":
+            return .readSelection
+        default:
+            return nil
+        }
+    }
+
     private nonisolated static func agentApprovalDecisionText(_ decision: AgentApprovalDecision) -> String {
         switch decision {
         case .approve:
@@ -1617,11 +1964,49 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
-    private nonisolated static func agentIntroText(providerName: String, project: ProjectIdentity?) -> String {
-        if let project {
-            return "I'll ask \(providerName) to inspect \(project.displayName) and summarize what it finds."
+    private nonisolated static func agentIntroText(providerName: String, project: ProjectIdentity?, mode: AgentMode) -> String {
+        switch mode {
+        case .ask:
+            if let project {
+                return "I'll ask \(providerName) to inspect \(project.displayName) and summarize what it finds."
+            }
+            return "I'll ask \(providerName) and summarize what it finds."
+        case .plan:
+            if let project {
+                return "I'll ask \(providerName) to plan this in \(project.displayName) and summarize the tradeoffs."
+            }
+            return "I'll ask \(providerName) to plan this and summarize the tradeoffs."
+        case .act:
+            if let project {
+                return "I'll ask \(providerName) to make that change in \(project.displayName) and summarize what changed."
+            }
+            return "I'll ask \(providerName) to make that change and summarize what changed."
         }
-        return "I'll ask \(providerName) and summarize what it finds."
+    }
+
+    private nonisolated static func speechText(from text: String) -> String {
+        let filtered = text.unicodeScalars.filter { !isSpeechEmojiScalar($0) }
+        return String(String.UnicodeScalarView(filtered))
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated static func isSpeechEmojiScalar(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.value == 0xFE0E || scalar.value == 0xFE0F || scalar.value == 0x200D {
+            return true
+        }
+        if scalar.properties.isEmojiPresentation {
+            return true
+        }
+        guard scalar.properties.isEmoji else {
+            return false
+        }
+        switch scalar.properties.generalCategory {
+        case .otherSymbol, .modifierSymbol:
+            return true
+        default:
+            return false
+        }
     }
 
     private nonisolated static func agentResultFormattingPrompt(
@@ -1663,6 +2048,80 @@ public actor DefaultAssistantSessionOrchestrator {
             detailsMarkdown: parsed.detailsMarkdown
         )
     }
+
+    private nonisolated static func normalizedAgentResponse(
+        _ response: AssistantResponseContent,
+        providerName: String,
+        mode: AgentMode,
+        rawAgentText: String
+    ) -> AssistantResponseContent {
+        guard mode == .act else {
+            return response
+        }
+        let paths = relativeFilePaths(in: rawAgentText)
+        guard !paths.isEmpty else {
+            return response
+        }
+
+        var bubble = response.bubbleText
+        var details = response.detailsMarkdown
+        let visibleText = [bubble, details].compactMap { $0 }.joined(separator: "\n")
+        let missingPaths = paths.filter { !visibleText.localizedCaseInsensitiveContains($0) }
+
+        if !missingPaths.isEmpty {
+            let section = (["Changed files:"] + paths.map { "- `\($0)`" }).joined(separator: "\n")
+            details = [details, section]
+                .compactMap { value in
+                    value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? value : nil
+                }
+                .joined(separator: "\n\n")
+        }
+
+        if paths.count == 1, !bubble.localizedCaseInsensitiveContains(paths[0]) {
+            let suffix = "Changed file: \(paths[0])."
+            if bubble.count + suffix.count + 1 <= 260 {
+                bubble = "\(bubble) \(suffix)"
+            } else {
+                bubble = "\(providerName) updated \(paths[0])."
+            }
+        } else if paths.count > 1,
+                  !paths.contains(where: { bubble.localizedCaseInsensitiveContains($0) }) {
+            bubble = "\(providerName) updated \(paths.count) files, including \(paths[0])."
+        }
+
+        return AssistantResponseContent(bubbleText: bubble, detailsMarkdown: details)
+    }
+
+    private nonisolated static func relativeFilePaths(in text: String) -> [String] {
+        let trimCharacters = CharacterSet(charactersIn: "`'\"()[]{}<>,;:")
+        var paths: [String] = []
+        var seen = Set<String>()
+        for rawToken in text.components(separatedBy: .whitespacesAndNewlines) {
+            let token = rawToken
+                .trimmingCharacters(in: trimCharacters)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".,"))
+            guard token.contains("/"),
+                  !token.hasPrefix("/"),
+                  !token.contains("://"),
+                  token.range(
+                    of: #"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"#,
+                    options: .regularExpression
+                  ) != nil,
+                  token.split(separator: "/").last?.contains(".") == true,
+                  seen.insert(token).inserted
+            else {
+                continue
+            }
+            paths.append(token)
+        }
+        return paths
+    }
+}
+
+private struct AssistantRoutingRecoveryError: LocalizedError {
+    var errorDescription: String? {
+        "I had trouble understanding that. Please try again."
+    }
 }
 
 private struct ActiveAssistantSessionListeningSession: Sendable {
@@ -1671,6 +2130,12 @@ private struct ActiveAssistantSessionListeningSession: Sendable {
     var transcriptTask: Task<String, Error>
     var timing: AssistantTurnTimingBuilder
     var listeningMessageID: ChatMessageID
+}
+
+private struct LastAgentContext: Sendable {
+    var providerID: ProviderID
+    var providerName: String
+    var project: ProjectIdentity?
 }
 
 private extension AssistantDirective {

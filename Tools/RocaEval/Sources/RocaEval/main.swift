@@ -39,6 +39,33 @@ struct RocaEvalCommand {
                 print("RocaEval wrote results to \(output.outputDirectory.path)")
                 print("Judge packet: \(output.outputDirectory.appendingPathComponent("judge_packet.md").path)")
                 print("Model assessments: \((configuration.assessmentsURL ?? Self.defaultAssessmentsDirectory()).path)")
+            case .interactions(let configuration):
+                let suite = try InteractionEvalSuite.load(from: configuration.suiteURL)
+                let runID = EvalRunConfiguration.defaultRunID()
+                let outputDirectory = configuration.outputURL ?? Self.defaultOutputDirectory(runID: runID)
+                let runner = InteractionEvalRunner(
+                    modelClient: configuration.mode == .modelInLoop
+                        ? OllamaEvalBrainClient(baseURL: configuration.baseURL)
+                        : nil
+                )
+                let output = try await runner.run(
+                    InteractionEvalRunConfiguration(
+                        suite: suite,
+                        mode: configuration.mode,
+                        outputDirectory: outputDirectory,
+                        runID: runID,
+                        modelID: configuration.modelID,
+                        baseURL: configuration.baseURL
+                    )
+                )
+                try InteractionEvalResultWriter.write(output)
+                print("RocaEval wrote interaction results to \(output.outputDirectory.path)")
+                print("Interaction report: \(output.outputDirectory.appendingPathComponent("interaction_report.md").path)")
+                print("Turns: \(output.run.turnCount), passed: \(output.run.passedTurnCount), failed: \(output.run.failedTurnCount), expected failures: \(output.run.expectedFailureCount)")
+                let unexpectedFailures = output.turns.filter { !$0.passed && $0.expectedFailureReason == nil }
+                if configuration.strict, !unexpectedFailures.isEmpty {
+                    exit(1)
+                }
             }
         } catch {
             fputs("RocaEval error: \(error.localizedDescription)\n\n\(Self.usage)\n", stderr)
@@ -66,6 +93,7 @@ struct RocaEvalCommand {
     private static let usage = """
     Usage:
       swift run RocaEval run [options]
+      swift run RocaEval interactions [options]
 
     Options:
       --suite PATH          Eval suite JSON. Default: evals/suites/assistant_quality_v1.json
@@ -78,11 +106,20 @@ struct RocaEvalCommand {
       --out PATH            Output directory. Default: evals/results/<run-id>
       --assessments-out PATH
                             Compact tracked model assessment directory.
+
+    Interaction options:
+      --suite PATH          Interaction suite JSON. Default: evals/suites/assistant_interactions_v1.json
+      --mode MODE           scripted or model-in-loop. Default: scripted
+      --model MODEL         Ollama model for model-in-loop mode.
+      --base-url URL        Ollama base URL for model-in-loop mode. Default: http://127.0.0.1:11434
+      --out PATH            Output directory. Default: evals/results/<run-id>
+      --strict              Exit nonzero on unexpected interaction failures.
     """
 }
 
 private enum EvalCommand {
     case run(RunCommandConfiguration)
+    case interactions(InteractionCommandConfiguration)
     case help
 }
 
@@ -96,6 +133,15 @@ private struct RunCommandConfiguration {
     var baseURL = URL(string: "http://127.0.0.1:11434")!
     var outputURL: URL?
     var assessmentsURL: URL?
+}
+
+private struct InteractionCommandConfiguration {
+    var suiteURL = URL(fileURLWithPath: "evals/suites/assistant_interactions_v1.json")
+    var mode: InteractionEvalMode = .scripted
+    var modelID: String?
+    var baseURL = URL(string: "http://127.0.0.1:11434")!
+    var outputURL: URL?
+    var strict = false
 }
 
 private struct CommandOptions {
@@ -113,6 +159,8 @@ private struct CommandOptions {
             return CommandOptions(command: .help)
         case "run":
             return CommandOptions(command: .run(try parseRun(arguments)))
+        case "interactions":
+            return CommandOptions(command: .interactions(try parseInteractions(arguments)))
         default:
             throw EvalError.invalidArguments("Unknown command: \(command)")
         }
@@ -156,6 +204,47 @@ private struct CommandOptions {
                 configuration.outputURL = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--assessments-out":
                 configuration.assessmentsURL = URL(fileURLWithPath: try value(), isDirectory: true)
+            default:
+                throw EvalError.invalidArguments("Unknown option: \(option)")
+            }
+            index += 1
+        }
+        return configuration
+    }
+
+    private static func parseInteractions(_ arguments: [String]) throws -> InteractionCommandConfiguration {
+        var configuration = InteractionCommandConfiguration()
+        var index = 0
+        while index < arguments.count {
+            let option = arguments[index]
+            func value() throws -> String {
+                guard index + 1 < arguments.count else {
+                    throw EvalError.invalidArguments("Missing value for \(option).")
+                }
+                index += 1
+                return arguments[index]
+            }
+
+            switch option {
+            case "--suite":
+                configuration.suiteURL = URL(fileURLWithPath: try value())
+            case "--mode":
+                let rawValue = try value()
+                guard let mode = InteractionEvalMode(rawValue: rawValue) else {
+                    throw EvalError.invalidArguments("--mode must be scripted or model-in-loop.")
+                }
+                configuration.mode = mode
+            case "--model":
+                configuration.modelID = try value()
+            case "--base-url":
+                guard let url = URL(string: try value()) else {
+                    throw EvalError.invalidArguments("--base-url must be a valid URL.")
+                }
+                configuration.baseURL = url
+            case "--out":
+                configuration.outputURL = URL(fileURLWithPath: try value(), isDirectory: true)
+            case "--strict":
+                configuration.strict = true
             default:
                 throw EvalError.invalidArguments("Unknown option: \(option)")
             }

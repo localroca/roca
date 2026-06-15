@@ -426,6 +426,49 @@ func evalAssessmentWriterMergesHardwareSpeedProfiles() throws {
     #expect(assessment.quality["companionRouter"]?.totalRequests == 24)
 }
 
+@Test
+func interactionEvalSuiteDecodesAndValidates() throws {
+    let suite = try JSONDecoder().decode(InteractionEvalSuite.self, from: interactionSuiteFixtureData())
+    try suite.validate()
+
+    #expect(suite.id == "assistant_interactions_v1")
+    #expect(suite.scenarios.map(\.id) == ["codex_endpoint_lookup"])
+    #expect(suite.scenarios.first?.turns.first?.expectations?.messages.first?.role == .assistant)
+}
+
+@Test
+func interactionEvalRunnerMocksAgentHandoffAndWritesResults() async throws {
+    let suite = try JSONDecoder().decode(InteractionEvalSuite.self, from: interactionSuiteFixtureData())
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("roca-interaction-eval-\(UUID().uuidString)", isDirectory: true)
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let output = try await InteractionEvalRunner().run(
+        InteractionEvalRunConfiguration(
+            suite: suite,
+            mode: .scripted,
+            outputDirectory: directory,
+            runID: "interaction-test"
+        )
+    )
+    try InteractionEvalResultWriter.write(output)
+
+    let record = try #require(output.turns.first)
+    #expect(output.run.turnCount == 1)
+    #expect(output.run.failedTurnCount == 0)
+    #expect(record.passed)
+    #expect(record.agentRequests.first?.workspacePath == "/workspace/uni-auth")
+    #expect(record.spokenTexts == [
+        "I'll ask Codex to inspect Uni Auth and summarize what it finds.",
+        "Codex found 2 passkey endpoints. I put the list below."
+    ])
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("interaction_run.json").path))
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("interaction_transcripts.jsonl").path))
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("interaction_report.md").path))
+}
+
 private func assessmentOutput(
     runID: String,
     modelID: String,
@@ -485,6 +528,86 @@ private func assessmentOutput(
         turns: [],
         outputDirectory: URL(fileURLWithPath: "/tmp/roca-eval-test")
     )
+}
+
+private func interactionSuiteFixtureData() -> Data {
+    #"""
+    {
+      "schemaVersion": 1,
+      "id": "assistant_interactions_v1",
+      "title": "Assistant Interaction Fixture",
+      "description": "Fixture.",
+      "scenarios": [
+        {
+          "id": "codex_endpoint_lookup",
+          "title": "Codex endpoint lookup",
+          "tags": ["agent", "codex", "details"],
+          "projects": [
+            {
+              "id": "uni-auth",
+              "displayName": "Uni Auth",
+              "aliases": ["uni-auth"],
+              "localPath": "/workspace/uni-auth"
+            }
+          ],
+          "agent": {
+            "providerID": "codex-agent",
+            "displayName": "Codex",
+            "kind": "noisy",
+            "responseText": "| Method | Endpoint |\n|---|---|\n| POST | /v1/auth/passkey/login/begin |\n| POST | /v1/auth/passkey/login/finish |"
+          },
+          "turns": [
+            {
+              "id": "ask_endpoints",
+              "user": "Can you ask uni-auth in Codex what endpoints there are for passkeys?",
+              "outputMode": "speakAll",
+              "brain": {
+                "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}",
+                "responseText": "{\"bubbleText\":\"Codex found 2 passkey endpoints. I put the list below.\",\"detailsMarkdown\":\"## Passkey endpoints\\n- POST /v1/auth/passkey/login/begin\\n- POST /v1/auth/passkey/login/finish\"}"
+              },
+              "expectations": {
+                "messages": [
+                  {
+                    "role": "assistant",
+                    "textContains": "ask Codex"
+                  },
+                  {
+                    "role": "action",
+                    "text": "Codex finished.",
+                    "status": "completed"
+                  },
+                  {
+                    "role": "assistant",
+                    "text": "Codex found 2 passkey endpoints. I put the list below.",
+                    "detailsContains": "/v1/auth/passkey/login/begin"
+                  }
+                ],
+                "forbiddenMessageTextContains": ["listing project files", "grep found passkey routes"],
+                "spokenTexts": [
+                  "I'll ask Codex to inspect Uni Auth and summarize what it finds.",
+                  "Codex found 2 passkey endpoints. I put the list below."
+                ],
+                "agentRequests": [
+                  {
+                    "providerID": "codex-agent",
+                    "workspacePath": "/workspace/uni-auth",
+                    "promptContains": "passkey endpoints",
+                    "mode": "ask"
+                  }
+                ],
+                "diagnostics": [
+                  {
+                    "kind": "agentRunCompleted",
+                    "outcome": "completed"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+    """#.data(using: .utf8)!
 }
 
 private func suiteFixtureData() -> Data {

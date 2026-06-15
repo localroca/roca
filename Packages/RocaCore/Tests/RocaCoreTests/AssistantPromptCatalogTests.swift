@@ -3,8 +3,8 @@ import Testing
 
 @Test
 func assistantPromptCatalogExposesStablePromptVersions() {
-    #expect(AssistantPromptCatalog.directivePromptVersion == "assistant-router-2026-06-13-v1")
-    #expect(AssistantPromptCatalog.responsePromptVersion == "companion-response-2026-05-26-v2")
+    #expect(AssistantPromptCatalog.directivePromptVersion == "assistant-router-2026-06-15-v1")
+    #expect(AssistantPromptCatalog.responsePromptVersion == "companion-response-2026-06-14-v1")
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"readSelection"}"#))
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"runAgent""#))
 }
@@ -30,6 +30,17 @@ func assistantPromptCatalogParsesStructuredAssistantResponse() {
     #expect(response.bubbleText == "Short.")
     #expect(response.detailsMarkdown == "## Details\n- One")
     #expect(response.conversationText == "Short.\n\n## Details\n- One")
+}
+
+@Test
+func assistantPromptCatalogRemovesDuplicatedBubbleFromDetails() {
+    let response = AssistantPromptCatalog.parseAssistantResponse(
+        "{\"bubbleText\":\"Short summary.\",\"detailsMarkdown\":\"Short summary.\\n\\n## Details\\n- One\"}"
+    )
+
+    #expect(response.bubbleText == "Short summary.")
+    #expect(response.detailsMarkdown == "## Details\n- One")
+    #expect(response.conversationText == "Short summary.\n\n## Details\n- One")
 }
 
 @Test

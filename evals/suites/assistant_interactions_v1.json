@@ -1,0 +1,729 @@
+{
+  "schemaVersion": 1,
+  "id": "assistant_interactions_v1",
+  "title": "Assistant Interaction Baseline",
+  "description": "End-to-end Roca assistant interaction scenarios with mocked agents, projects, approvals, speech, diagnostics, and transcript assertions.",
+  "scenarios": [
+    {
+      "id": "codex_endpoint_lookup_clean_handoff",
+      "title": "Codex endpoint lookup",
+      "description": "Codex handoff should feel conversational, hide raw tool progress, speak only short summaries, and put endpoint details in Markdown.",
+      "tags": ["agent", "codex", "handoff", "speech", "details", "issue-29"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "noisy",
+        "responseText": "| Method | Endpoint |\n|---|---|\n| POST | /v1/auth/passkey/login/begin |\n| POST | /v1/auth/passkey/login/finish |"
+      },
+      "turns": [
+        {
+          "id": "ask_endpoints",
+          "user": "Can you ask uni-auth in Codex what endpoints there are for passkeys?",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found 2 passkey endpoints. I put the list below.\",\"detailsMarkdown\":\"## Passkey endpoints\\n- POST /v1/auth/passkey/login/begin\\n- POST /v1/auth/passkey/login/finish\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll ask Codex to inspect Uni Auth and summarize what it finds."
+              },
+              {
+                "role": "action",
+                "text": "Codex finished.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "Codex found 2 passkey endpoints. I put the list below.",
+                "detailsContains": "/v1/auth/passkey/login/begin"
+              }
+            ],
+            "forbiddenMessageTextContains": ["listing project files", "grep found passkey routes", "I'll run ls"],
+            "spokenTexts": [
+              "I'll ask Codex to inspect Uni Auth and summarize what it finds.",
+              "Codex found 2 passkey endpoints. I put the list below."
+            ],
+            "agentRequests": [
+              {
+                "providerID": "codex-agent",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "passkey endpoints",
+                "mode": "ask"
+              }
+            ],
+            "diagnostics": [
+              {
+                "kind": "agentRunCompleted",
+                "outcome": "completed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "codex_act_intro_copy",
+      "title": "Codex act intro copy",
+      "description": "Edit requests should say Roca is asking Codex to make a change, not inspect the project.",
+      "tags": ["agent", "codex", "handoff", "copy", "issue-29"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "Updated routes/passkeys.ts."
+      },
+      "turns": [
+        {
+          "id": "ask_codex_to_edit",
+          "user": "Ask Codex to add a short comment to the Uni Auth passkey route.",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"add a short comment to the passkey route\",\"mode\":\"act\"}",
+            "responseText": "{\"bubbleText\":\"Codex updated the passkey route comment.\",\"detailsMarkdown\":\"Changed routes/passkeys.ts.\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll ask Codex to make that change in Uni Auth and summarize what changed."
+              },
+              {
+                "role": "assistant",
+                "text": "Codex updated the passkey route comment. Changed file: routes/passkeys.ts.",
+                "detailsContains": "routes/passkeys.ts"
+              }
+            ],
+            "forbiddenMessageTextContains": ["inspect Uni Auth and summarize what it finds"],
+            "spokenTexts": [
+              "I'll ask Codex to make that change in Uni Auth and summarize what changed.",
+              "Codex updated the passkey route comment. Changed file: routes/passkeys.ts."
+            ],
+            "agentRequests": [
+              {
+                "providerID": "codex-agent",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "short comment",
+                "mode": "act"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "read_previous_agent_result_out_loud",
+      "title": "Read previous agent result out loud",
+      "description": "Follow-up requests to say the previous Codex result should use chat memory, not selected-text reading.",
+      "tags": ["agent", "codex", "speech", "memory", "issue-29"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "POST /v1/auth/passkey/login/begin\nPOST /v1/auth/passkey/login/finish"
+      },
+      "turns": [
+        {
+          "id": "ask_endpoints",
+          "user": "Ask Codex for the Uni Auth passkey endpoints.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"list passkey endpoints\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found 2 passkey endpoints.\",\"detailsMarkdown\":\"## Endpoints\\n- POST /v1/auth/passkey/login/begin\\n- POST /v1/auth/passkey/login/finish\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "detailsContains": "/v1/auth/passkey/login/begin"
+              }
+            ]
+          }
+        },
+        {
+          "id": "tell_it_out_loud",
+          "user": "Can you tell it to me out loud?",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"readSelection\"}",
+            "responseText": "{\"bubbleText\":\"Codex found two Uni Auth passkey endpoints: one to begin login and one to finish login.\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "textContains": "begin login"
+              }
+            ],
+            "forbiddenMessageTextContains": ["No selected text found"],
+            "spokenTexts": ["Codex found two Uni Auth passkey endpoints: one to begin login and one to finish login."],
+            "memoryContains": ["/v1/auth/passkey/login/begin"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "verbal_endpoint_flow_no_markdown",
+      "title": "Verbal endpoint flow",
+      "description": "When the user asks for a spoken flow, Roca should explain it conversationally instead of printing a Markdown artifact.",
+      "tags": ["conversation", "speech", "formatting", "issue-29"],
+      "turns": [
+        {
+          "id": "explain_flow",
+          "user": "Can you tell me the flow for the endpoints, not just print them out?",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"readSelection\"}",
+            "responseText": "{\"bubbleText\":\"Sure. The flow is: start the passkey login, let the client complete the platform challenge, then finish the login with the signed result.\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "textContains": "start the passkey login"
+              }
+            ],
+            "forbiddenMessageTextContains": ["##", "| Method |", "- POST"],
+            "spokenTexts": ["Sure. The flow is: start the passkey login, let the client complete the platform challenge, then finish the login with the signed result."]
+          }
+        }
+      ]
+    },
+    {
+      "id": "codex_edit_approval_card",
+      "title": "Codex edit approval card",
+      "description": "Approval prompts should render as actionable chat cards with approve-once/session/deny outcomes.",
+      "tags": ["agent", "codex", "approval"],
+      "turns": [
+        {
+          "id": "approve_edit",
+          "user": "Codex wants approval to edit Uni Auth.",
+          "approvalPrompt": {
+            "title": "Codex needs approval",
+            "providerID": "codex-agent",
+            "mode": "act",
+            "workspacePath": "/workspace/uni-auth",
+            "dataScopes": ["prompt", "workspaceFiles"],
+            "actionScopes": ["readWorkspace", "runCommands", "editWorkspace"],
+            "decision": "approveForSession"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "action",
+                "approvalTitleContains": "Codex needs approval",
+                "approvalDecision": "approveForSession",
+                "status": "completed"
+              },
+              {
+                "role": "action",
+                "text": "Remembered approval."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "follow_up_edit_keeps_project_context",
+      "title": "Follow-up edit context",
+      "description": "A follow-up edit should keep the prior provider and project context rather than asking the user to restate the folder.",
+      "tags": ["agent", "codex", "memory", "project", "issue-29"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "Done."
+      },
+      "turns": [
+        {
+          "id": "ask_first",
+          "user": "Ask Codex in Uni Auth what passkey files matter.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"identify passkey files\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found the passkey files.\",\"detailsMarkdown\":\"## Files\\n- routes/passkeys.ts\"}"
+          }
+        },
+        {
+          "id": "follow_up_edit",
+          "user": "Great, tell Codex to add a short comment there.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"prompt\":\"add a short comment in the passkey files\",\"mode\":\"act\"}",
+            "responseText": "{\"bubbleText\":\"Codex updated the passkey file with a short comment.\",\"detailsMarkdown\":\"Changed routes/passkeys.ts.\"}"
+          },
+          "expectations": {
+            "agentRequests": [
+              {
+                "providerID": "codex-agent",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "short comment",
+                "mode": "act"
+              }
+            ],
+            "memoryContains": ["routes/passkeys.ts"],
+            "forbiddenMessageTextContains": ["Which project should Codex use?"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ambiguous_project_clarification",
+      "title": "Ambiguous project clarification",
+      "description": "Ambiguous project phrases should produce a concise project-choice question before any agent is started.",
+      "tags": ["agent", "project", "clarification"],
+      "projects": [
+        {
+          "id": "ter-admin",
+          "displayName": "TER Admin",
+          "localPath": "/workspace/ter-admin"
+        },
+        {
+          "id": "ter-backend",
+          "displayName": "TER Backend",
+          "localPath": "/workspace/ter-backend"
+        },
+        {
+          "id": "ter-frontend",
+          "displayName": "TER Frontend",
+          "localPath": "/workspace/ter-frontend"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": ""
+      },
+      "turns": [
+        {
+          "id": "ask_ter",
+          "user": "Ask Codex in the ter project what auth endpoints exist.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"what auth endpoints exist?\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Which project do you mean: TER Admin, TER Backend, TER Frontend?"
+              }
+            ],
+            "agentRequestCount": 0,
+            "agentRequests": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "explicit_ambiguous_project_overrides_prior_context",
+      "title": "Explicit ambiguous project beats prior context",
+      "description": "If recent context is Uni Auth but the user says the ter project, Roca should not reuse Uni Auth; it should discover TER matches and ask which one.",
+      "tags": ["agent", "project", "memory", "clarification", "issue-29"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "UNI Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        },
+        {
+          "id": "cached-ter-backend",
+          "displayName": "TER Backend",
+          "localPath": "/workspace/ter-backend"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "Done.",
+        "discoveryCandidates": [
+          {
+            "project": {
+              "id": "ter-admin",
+              "displayName": "TER Admin",
+              "localPath": "/workspace/ter-admin"
+            },
+            "confidence": "high",
+            "score": 100
+          },
+          {
+            "project": {
+              "id": "ter-backend",
+              "displayName": "TER Backend",
+              "localPath": "/workspace/ter-backend"
+            },
+            "confidence": "high",
+            "score": 136
+          },
+          {
+            "project": {
+              "id": "ter-mailer",
+              "displayName": "TER Mailer",
+              "localPath": "/workspace/ter-mailer"
+            },
+            "confidence": "high",
+            "score": 90
+          }
+        ]
+      },
+      "turns": [
+        {
+          "id": "ask_uni_auth_first",
+          "user": "Ask Codex in Uni Auth what passkey files matter.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey files matter?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found the passkey files.\",\"detailsMarkdown\":\"## Files\\n- routes/passkeys.ts\"}"
+          }
+        },
+        {
+          "id": "ask_ter_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+              }
+            ],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "other_project_correction_excludes_prior_match",
+      "title": "Other project correction excludes rejected match",
+      "description": "If the user corrects Roca with 'not ter-backend, the other ter project', Roca should search for TER and ask between the remaining TER matches.",
+      "tags": ["agent", "project", "clarification", "correction", "issue-29"],
+      "projects": [
+        {
+          "id": "cached-ter-backend",
+          "displayName": "TER Backend",
+          "localPath": "/workspace/ter-backend"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "Done.",
+        "discoveryCandidates": [
+          {
+            "project": {
+              "id": "ter-admin",
+              "displayName": "TER Admin",
+              "localPath": "/workspace/ter-admin"
+            },
+            "confidence": "high",
+            "score": 100
+          },
+          {
+            "project": {
+              "id": "ter-backend",
+              "displayName": "TER Backend",
+              "localPath": "/workspace/ter-backend"
+            },
+            "confidence": "high",
+            "score": 136
+          },
+          {
+            "project": {
+              "id": "ter-mailer",
+              "displayName": "TER Mailer",
+              "localPath": "/workspace/ter-mailer"
+            },
+            "confidence": "high",
+            "score": 90
+          }
+        ]
+      },
+      "turns": [
+        {
+          "id": "reject_backend_ask_other_ter",
+          "user": "No I mean not ter-backend project, ask codex how many lines are in the readme for the other ter project",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter project\",\"prompt\":\"how many lines are in the README.md\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Which project do you mean: TER Admin, TER Mailer?"
+              }
+            ],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "provider_discovery_failure_recovery",
+      "title": "Provider discovery failure recovery",
+      "description": "If provider-side project discovery fails, Roca should say that directly and ask for the folder.",
+      "tags": ["agent", "project", "diagnostics"],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "",
+        "discoveryError": "project discovery timed out"
+      },
+      "turns": [
+        {
+          "id": "ask_missing_project",
+          "user": "Can you ask uni-auth in Codex what endpoints there are for passkeys?",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "action",
+                "text": "Codex project lookup failed.",
+                "status": "failed"
+              },
+              {
+                "role": "assistant",
+                "textContains": "couldn't read Codex's project list in time"
+              }
+            ],
+            "spokenTextContains": ["couldn't read Codex's project list in time"],
+            "diagnostics": [
+              {
+                "kind": "agentProjectLookupFailed",
+                "phase": "projectLookup",
+                "outcome": "failed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "malformed_router_output_recovery",
+      "title": "Malformed router recovery",
+      "description": "Bad router JSON should recover with a friendly user-facing message instead of exposing parser internals.",
+      "tags": ["routing", "recovery", "issue-29"],
+      "turns": [
+        {
+          "id": "bad_router_json",
+          "user": "Ask Codex about Uni Auth passkeys.",
+          "brain": {
+            "directiveJSON": "not json"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "status",
+                "textContains": "I had trouble understanding that"
+              }
+            ],
+            "forbiddenMessageTextContains": ["data couldn't be read", "JSON", "parse"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "duplicate_bubble_details_cleanup",
+      "title": "Duplicate bubble and details cleanup",
+      "description": "Structured formatter output should not repeat the exact bubble at the top of detailsMarkdown.",
+      "tags": ["formatting", "details", "issue-29"],
+      "turns": [
+        {
+          "id": "duplicate_details",
+          "user": "Give me the short summary and details.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"respond\"}",
+            "responseText": "{\"bubbleText\":\"Short summary.\",\"detailsMarkdown\":\"Short summary.\\n\\n## Details\\n- One useful detail\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Short summary.",
+                "detailsContains": "## Details"
+              }
+            ],
+            "forbiddenDetailsTextContains": ["Short summary."]
+          }
+        }
+      ]
+    },
+    {
+      "id": "codex_edit_precise_file_summary",
+      "title": "Codex edit precise file summary",
+      "description": "Edit summaries should preserve exact relative paths from Codex instead of collapsing them to a basename.",
+      "tags": ["agent", "codex", "formatting", "issue-29"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "normal",
+        "responseText": "Updated infra/README.md with the deployment note."
+      },
+      "turns": [
+        {
+          "id": "edit_readme",
+          "user": "Ask Codex to update the Uni Auth infrastructure README.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"update the infrastructure README\",\"mode\":\"act\"}",
+            "responseText": "{\"bubbleText\":\"Codex updated the README.\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "textContains": "infra/README.md",
+                "detailsContains": "infra/README.md"
+              }
+            ],
+            "agentRequests": [
+              {
+                "providerID": "codex-agent",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "infrastructure README",
+                "mode": "act"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "emoji_stripped_from_tts_only",
+      "title": "Emoji stripped from TTS",
+      "description": "Emoji can remain visible in chat, but the speech text should not include them.",
+      "tags": ["speech", "formatting", "issue-29"],
+      "turns": [
+        {
+          "id": "emoji_response",
+          "user": "Give me the short version out loud.",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"respond\"}",
+            "responseText": "{\"bubbleText\":\"\\u2705 Codex found 2 endpoints.\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "textContains": "Codex found 2 endpoints"
+              }
+            ],
+            "spokenTexts": ["Codex found 2 endpoints."],
+            "forbiddenSpeechTextContains": ["\u2705"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "cancel_agent_retry",
+      "title": "Cancel agent and retry",
+      "description": "Stopping a long-running agent handoff should clear active turn state so the next user message is accepted.",
+      "tags": ["agent", "cancel", "retry"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "codex-agent",
+        "displayName": "Codex",
+        "kind": "hanging",
+        "responseText": ""
+      },
+      "turns": [
+        {
+          "id": "start_and_cancel",
+          "user": "Ask Codex in Uni Auth to inspect passkey endpoints.",
+          "cancelAfterAgentStarts": true,
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"inspect passkey endpoints\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "status",
+                "text": "Assistant cancelled.",
+                "status": "cancelled"
+              }
+            ],
+            "diagnostics": [
+              {
+                "kind": "turnCancelled",
+                "outcome": "cancelled"
+              }
+            ],
+            "agentRequestCount": 1
+          }
+        },
+        {
+          "id": "retry_after_cancel",
+          "user": "Thanks, just answer normally now.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"respond\"}",
+            "responseText": "{\"bubbleText\":\"Back with you. What should we look at next?\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Back with you. What should we look at next?"
+              }
+            ],
+            "forbiddenMessageTextContains": ["Still finishing the current turn"],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    }
+  ]
+}

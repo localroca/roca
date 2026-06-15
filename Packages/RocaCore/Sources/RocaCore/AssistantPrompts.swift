@@ -30,8 +30,8 @@ public struct AssistantResponseContent: Equatable, Sendable, Codable {
 }
 
 public enum AssistantPromptCatalog {
-    public static let directivePromptVersion = "assistant-router-2026-06-13-v1"
-    public static let responsePromptVersion = "companion-response-2026-05-26-v2"
+    public static let directivePromptVersion = "assistant-router-2026-06-15-v1"
+    public static let responsePromptVersion = "companion-response-2026-06-14-v1"
 
     public static let directiveSystemPrompt = """
     You are Roca's local router. Return only a single JSON object.
@@ -50,11 +50,14 @@ public enum AssistantPromptCatalog {
     - Use quitApplication only for explicit requests to quit or close an app.
     - Use insertText only when the user explicitly asks to type, write, insert, reply, or put text into the focused field.
     - Use readSelection only when the user explicitly asks to read the current highlighted or selected text aloud.
+    - If the user asks to say, tell, read, or explain a previous Roca answer out loud, use respond, not readSelection.
     - Use runAgent only when the user explicitly asks Roca to use an external coding/work agent such as Codex, Claude, or Cursor.
     - For runAgent providerID, use codex-agent, claude-agent, or cursor-agent.
     - For runAgent projectName, preserve the project phrase the user gave. Omit it only when no project is mentioned.
+    - If the user says "in the X project", "for the X repo", or similar, include projectName X even if recent context mentioned a different project.
     - For runAgent prompt, include the task for the agent without "ask Codex/Claude/Cursor to".
     - For runAgent mode, use ask for questions or inspection, plan for plans/tradeoffs, and act for requested code changes.
+    - If recent context identifies an agent project and the user asks that agent for a follow-up change there, reuse the same provider and project.
     - Otherwise use respond.
     - Never invent unsupported command types.
     """
@@ -97,7 +100,7 @@ public enum AssistantPromptCatalog {
             if let bubble {
                 return AssistantResponseContent(
                     bubbleText: bubble,
-                    detailsMarkdown: details == bubble ? nil : details
+                    detailsMarkdown: detailsRemovingDuplicatedBubble(bubble: bubble, details: details)
                 )
             }
             if let details {
@@ -149,6 +152,7 @@ public enum AssistantPromptCatalog {
     - Keep bubbleText under 280 characters by default.
     - detailsMarkdown is optional. Use it only when the user asks for depth, code, steps, lists, comparison, analysis, or drafting.
     - detailsMarkdown may use full Markdown. Use null when no details are needed.
+    - If the user asks to say, tell, read, or explain something out loud, put the spoken answer in bubbleText and keep detailsMarkdown null unless they also ask for written details.
 
     Default style:
     - Answer like a warm human texting back, not like a help article or support bot.
@@ -180,6 +184,7 @@ public enum AssistantPromptCatalog {
     - Keep bubbleText under 280 characters by default.
     - detailsMarkdown is optional. Use it only when the user asks for depth, code, steps, lists, comparison, analysis, or drafting.
     - detailsMarkdown may use full Markdown. Use null when no details are needed.
+    - If the user asks to say, tell, read, or explain something rather than print it, put the answer in bubbleText and keep detailsMarkdown null unless they also ask for written details.
 
     Default style:
     - For greetings, check-ins, thanks, jokes, and casual chat, respond casually. Do not give productivity tips unless asked.
@@ -229,6 +234,34 @@ public enum AssistantPromptCatalog {
     private static func clean(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func detailsRemovingDuplicatedBubble(bubble: String, details: String?) -> String? {
+        guard let details = clean(details) else {
+            return nil
+        }
+        let normalizedBubble = normalizedForComparison(bubble)
+        let normalizedDetails = normalizedForComparison(details)
+        if normalizedDetails == normalizedBubble {
+            return nil
+        }
+        guard normalizedDetails.hasPrefix(normalizedBubble) else {
+            return details
+        }
+        guard details.range(of: bubble, options: [.caseInsensitive, .anchored]) != nil else {
+            return details
+        }
+
+        let suffixStart = details.index(details.startIndex, offsetBy: bubble.count)
+        let suffix = details[suffixStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return suffix.isEmpty ? nil : suffix
+    }
+
+    private static func normalizedForComparison(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 }
 

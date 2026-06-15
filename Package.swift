@@ -54,7 +54,7 @@ let package = Package(
         ),
         .target(
             name: "RocaEvalSupport",
-            dependencies: ["RocaCore", "RocaProviders"],
+            dependencies: ["RocaCore", "RocaProviders", "RocaServices", "RocaTestingSupport"],
             path: "Tools/RocaEvalSupport/Sources/RocaEvalSupport"
         ),
         .executableTarget(
@@ -64,7 +64,7 @@ let package = Package(
         ),
         .target(
             name: "RocaTestingSupport",
-            dependencies: ["RocaCore"],
+            dependencies: ["RocaCore", "RocaServices"],
             path: "Packages/RocaTestingSupport/Sources/RocaTestingSupport"
         ),
         .testTarget(
@@ -79,7 +79,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RocaServicesTests",
-            dependencies: ["RocaCore", "RocaServices"],
+            dependencies: ["RocaCore", "RocaServices", "RocaTestingSupport"],
             path: "Packages/RocaServices/Tests/RocaServicesTests"
         ),
         .testTarget(
