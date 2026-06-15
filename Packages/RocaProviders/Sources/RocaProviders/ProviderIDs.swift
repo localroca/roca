@@ -77,3 +77,22 @@ public enum BuiltInProviderDescriptors {
         ]
     }
 }
+
+public enum BuiltInCapabilityDescriptors {
+    public static func phaseTwo() -> [CapabilityDescriptor] {
+        [
+            CapabilityDescriptor.agent(
+                providerID: BuiltInProviderIDs.codexAgent,
+                displayName: "Codex",
+                capabilities: AgentCapabilities(
+                    supportsStreaming: true,
+                    supportsToolApprovals: true,
+                    supportsLocalExecution: true,
+                    locality: .remote,
+                    supportedModes: AgentMode.allCases
+                ),
+                supportsProjectDiscovery: true
+            )
+        ]
+    }
+}
