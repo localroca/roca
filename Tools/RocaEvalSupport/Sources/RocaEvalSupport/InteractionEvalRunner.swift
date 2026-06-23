@@ -95,6 +95,7 @@ public struct InteractionEvalRunner: Sendable {
             let allAgentRequests = await agentRequestRecords(from: agentBundle.provider)
             let allProjectWrites = await writer.upsertedProjects
             let allBrainRequests = await brain.requests()
+            let assistantTasks = await orchestrator.taskSnapshot()
             let newSpeech = Array(allSpeech.dropFirst(speechStart))
             let newDiagnostics = Array(allDiagnostics.dropFirst(diagnosticStart))
             let newAgentRequests = Array(allAgentRequests.dropFirst(agentRequestStart))
@@ -130,6 +131,7 @@ public struct InteractionEvalRunner: Sendable {
                     agentRequests: newAgentRequests,
                     projectWrites: newProjectWrites,
                     diagnostics: newDiagnostics,
+                    assistantTasks: assistantTasks,
                     brainRequests: newBrainRequests
                 )
             )

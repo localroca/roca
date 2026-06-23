@@ -846,6 +846,22 @@ func assistantSessionResumesPendingProjectClarificationWithOriginalAgentRequest(
         message.role == .assistant
             && message.detailsMarkdown?.contains("README.md has 42 lines.") == true
     })
+
+    let tasks = await orchestrator.taskSnapshot()
+    #expect(tasks.count == 1)
+    let task = try #require(tasks.first)
+    #expect(task.status == .completed)
+    #expect(task.userRequest == "Can you ask codex to tell me how many lines the README.md file is in the ter project?")
+    #expect(task.providerID == "codex-agent")
+    #expect(task.mode == .ask)
+    #expect(task.projectQuery == "ter")
+    #expect(task.resolvedProject?.id == "ter-backend")
+    #expect(task.resultSummary == "Codex found the README line count.")
+    #expect(task.resultDetailsMarkdown == "README.md has 42 lines.")
+    #expect(task.events.map(\.kind).contains(.clarificationRequested))
+    #expect(task.events.map(\.kind).contains(.clarificationResolved))
+    #expect(task.events.map(\.kind).contains(.providerRunStarted))
+    #expect(task.events.map(\.kind).contains(.completed))
 }
 
 @Test
@@ -1113,6 +1129,9 @@ func assistantSessionCancelClearsActiveAgentTurnForRetry() async throws {
     let messages = await orchestrator.messageSnapshot
     #expect(messages.contains { $0.role == .status && $0.status == .cancelled && $0.text == "Assistant cancelled." })
     #expect(!messages.contains { $0.text == "Finish the current turn first." })
+    let cancelledTask = try #require(await orchestrator.taskSnapshot().first)
+    #expect(cancelledTask.status == .cancelled)
+    #expect(cancelledTask.events.map(\.kind).contains(.cancelled))
 
     await orchestrator.cancel()
     try await value(from: secondTask)

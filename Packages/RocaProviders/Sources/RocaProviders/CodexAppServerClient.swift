@@ -66,6 +66,7 @@ public struct CodexAppServerClient: CodexAgentClient {
                     try session.send(.request(id: 1, method: "initialize", params: CodexAppServerRequestBuilder.initializeParams()))
 
                     var accumulatedText = ""
+                    var threadID: String?
                     var didComplete = false
 
                     for try await line in session.outputLines() {
@@ -93,12 +94,13 @@ public struct CodexAppServerClient: CodexAgentClient {
                                     )
                                 )
                             case 2:
-                                let threadID = try Self.threadID(from: message)
+                                let resolvedThreadID = try Self.threadID(from: message)
+                                threadID = resolvedThreadID
                                 try session.send(
                                     .request(
                                         id: 3,
                                         method: "turn/start",
-                                        params: CodexAppServerRequestBuilder.turnStartParams(for: request, threadID: threadID)
+                                        params: CodexAppServerRequestBuilder.turnStartParams(for: request, threadID: resolvedThreadID)
                                     )
                                 )
                             case 3:
@@ -116,6 +118,7 @@ public struct CodexAppServerClient: CodexAgentClient {
                                 providerID: providerID,
                                 session: session,
                                 approvalDecisioner: approvalDecisioner,
+                                threadID: threadID,
                                 accumulatedText: &accumulatedText,
                                 didComplete: &didComplete,
                                 continuation: continuation
@@ -477,6 +480,7 @@ public struct CodexAppServerClient: CodexAgentClient {
         providerID: ProviderID,
         session: CodexAppServerSession,
         approvalDecisioner: any AgentApprovalDecisioning,
+        threadID: String?,
         accumulatedText: inout String,
         didComplete: inout Bool,
         continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation
@@ -535,12 +539,16 @@ public struct CodexAppServerClient: CodexAgentClient {
                     : RocaError.approvalRequired(prompt.detail)
             }
         case "turn/completed":
+            var metadata = ["source": "codex-app-server"]
+            if let threadID {
+                metadata["threadID"] = threadID
+            }
             continuation.yield(
                 .final(
                     AgentResponse(
                         text: accumulatedText,
                         usedProvider: providerID,
-                        metadata: ["source": "codex-app-server"]
+                        metadata: metadata
                     )
                 )
             )

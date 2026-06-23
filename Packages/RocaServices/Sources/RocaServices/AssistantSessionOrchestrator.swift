@@ -30,6 +30,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private let contextProvider: any AssistantContextProviding
     private let projectCatalog: (any ProjectIdentityCatalog)?
     private let projectWriter: (any ProjectIdentityWriting)?
+    private let taskLedger: any AssistantTaskLedger
     private let readSelectionCommand: ReadSelectionCommand?
     private let companionState: CompanionStateCenter?
     private let stopSpeech: StopSpeechHandler
@@ -49,6 +50,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private var activeBrainRequestID: BrainRequestID?
     private var activeAgentProvider: (any AgentProvider)?
     private var activeAgentRunID: AgentRunID?
+    private var activeAssistantTaskID: AssistantTaskID?
     private var cancelledTurnIDs: Set<BrainRequestID> = []
     private var conversationMessages: [BrainMessage] = []
     private var lastContextPacket: AssistantContextPacket?
@@ -133,6 +135,7 @@ public actor DefaultAssistantSessionOrchestrator {
         contextProvider: any AssistantContextProviding = DefaultAssistantContextProvider(),
         projectCatalog: (any ProjectIdentityCatalog)? = nil,
         projectWriter: (any ProjectIdentityWriting)? = nil,
+        taskLedger: any AssistantTaskLedger = InMemoryAssistantTaskLedger(),
         readSelectionCommand: ReadSelectionCommand? = nil,
         companionState: CompanionStateCenter? = nil,
         stopSpeech: @escaping StopSpeechHandler
@@ -146,9 +149,14 @@ public actor DefaultAssistantSessionOrchestrator {
         self.contextProvider = contextProvider
         self.projectCatalog = projectCatalog
         self.projectWriter = projectWriter ?? (projectCatalog as? any ProjectIdentityWriting)
+        self.taskLedger = taskLedger
         self.readSelectionCommand = readSelectionCommand
         self.companionState = companionState
         self.stopSpeech = stopSpeech
+    }
+
+    public func taskSnapshot() async -> [AssistantTaskRecord] {
+        await taskLedger.tasks()
     }
 
     public func submitText(_ text: String, request: AssistantSessionTurnRequest) async {
@@ -306,7 +314,7 @@ public actor DefaultAssistantSessionOrchestrator {
         await emit(.interrupted, message: "Assistant cancelled.", correlationID: nil)
     }
 
-    public func clearConversation() {
+    public func clearConversation() async {
         messages = [
             ChatMessage(
                 role: .status,
@@ -318,6 +326,7 @@ public actor DefaultAssistantSessionOrchestrator {
         conversationMessages = []
         lastContextPacket = nil
         pendingProjectClarification = nil
+        await taskLedger.clear()
         publishMessages()
     }
 
@@ -338,7 +347,7 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
-    public func submitAgentApprovalDecision(_ messageID: ChatMessageID, decision: AgentApprovalDecision) {
+    public func submitAgentApprovalDecision(_ messageID: ChatMessageID, decision: AgentApprovalDecision) async {
         guard let index = messages.firstIndex(where: { $0.id == messageID }),
               var approval = messages[index].approvalRequest,
               approval.decision == nil
@@ -352,6 +361,23 @@ public actor DefaultAssistantSessionOrchestrator {
         messages[index].text = Self.agentApprovalDecisionText(decision)
         messages[index].status = Self.agentApprovalMessageStatus(decision)
         publishMessages()
+
+        if let activeAssistantTaskID {
+            await recordTaskEvent(
+                activeAssistantTaskID,
+                kind: decision == .cancel || decision == .deny ? .failed : .approvalResolved,
+                status: decision == .cancel || decision == .deny ? .failed : .running,
+                turnID: activeTurnID,
+                phase: "approval",
+                summary: Self.agentApprovalDecisionText(decision)
+            ) { task in
+                task.approvalDecision = decision
+                if decision == .cancel || decision == .deny {
+                    task.failurePhase = "approval"
+                    task.failureMessage = Self.agentApprovalDecisionText(decision)
+                }
+            }
+        }
 
         approvalContinuations.removeValue(forKey: messageID)?.resume(returning: decision)
     }
@@ -536,6 +562,14 @@ public actor DefaultAssistantSessionOrchestrator {
             timing.directiveType = .runAgent
             timing.directiveFinishedAt = Date()
             let message = "No problem, I won't hand that to \(pending.providerName)."
+            await recordTaskEvent(
+                pending.taskID,
+                kind: .cancelled,
+                status: .cancelled,
+                turnID: request.turnID,
+                phase: "projectClarification",
+                summary: message
+            )
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
@@ -550,6 +584,22 @@ public actor DefaultAssistantSessionOrchestrator {
             directive.projectName = project.displayName
             timing.directiveType = .runAgent
             timing.directiveFinishedAt = Date()
+            await recordTaskEvent(
+                pending.taskID,
+                kind: .clarificationResolved,
+                status: .resolvingProject,
+                turnID: request.turnID,
+                phase: "projectClarification",
+                summary: "User chose \(project.displayName).",
+                metadata: [
+                    "clarificationTurnID": pending.createdTurnID.rawValue,
+                    "questionMessageID": pending.questionMessageID.rawValue,
+                    "projectQuery": pending.query,
+                    "projectID": project.id.rawValue
+                ]
+            ) { task in
+                task.resolvedProject = project
+            }
             emitDiagnostic(
                 kind: .directiveResolved,
                 turnID: request.turnID,
@@ -575,7 +625,8 @@ public actor DefaultAssistantSessionOrchestrator {
                 context: context,
                 brainProvider: brainProvider,
                 timing: &timing,
-                resolvedProjectOverride: project
+                resolvedProjectOverride: project,
+                existingTaskID: pending.taskID
             )
             return true
         case .ambiguous(_, let candidates):
@@ -583,6 +634,15 @@ public actor DefaultAssistantSessionOrchestrator {
             timing.directiveType = .runAgent
             timing.directiveFinishedAt = Date()
             let message = Self.projectClarificationQuestion(for: candidates)
+            await recordTaskEvent(
+                pending.taskID,
+                kind: .clarificationRequested,
+                status: .waitingForClarification,
+                turnID: request.turnID,
+                phase: "projectClarification",
+                summary: message,
+                metadata: ["candidateCount": String(candidates.count)]
+            )
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
@@ -590,6 +650,14 @@ public actor DefaultAssistantSessionOrchestrator {
             return true
         case .missing:
             guard Self.looksLikeProjectClarificationAnswer(input, candidates: pending.candidates) else {
+                await recordTaskEvent(
+                    pending.taskID,
+                    kind: .cancelled,
+                    status: .cancelled,
+                    turnID: request.turnID,
+                    phase: "projectClarification",
+                    summary: "User moved on before clarifying \(pending.query)."
+                )
                 pendingProjectClarification = nil
                 return false
             }
@@ -597,6 +665,14 @@ public actor DefaultAssistantSessionOrchestrator {
             timing.directiveFinishedAt = Date()
             let names = pending.candidates.map(\.displayName).joined(separator: ", ")
             let message = "I couldn't match that to one of the project options. Which project do you mean: \(names)?"
+            await recordTaskEvent(
+                pending.taskID,
+                kind: .clarificationRequested,
+                status: .waitingForClarification,
+                turnID: request.turnID,
+                phase: "projectClarification",
+                summary: message
+            )
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
@@ -734,7 +810,8 @@ public actor DefaultAssistantSessionOrchestrator {
         context: AssistantLocalContext,
         brainProvider: any BrainProvider,
         timing: inout AssistantTurnTimingBuilder,
-        resolvedProjectOverride: ProjectIdentity? = nil
+        resolvedProjectOverride: ProjectIdentity? = nil,
+        existingTaskID: AssistantTaskID? = nil
     ) async throws {
         try checkTurnStillActive(request.turnID)
         let providerName = directive.providerDisplayName
@@ -754,15 +831,56 @@ public actor DefaultAssistantSessionOrchestrator {
             return
         }
 
+        let taskID: AssistantTaskID
+        if let existingTaskID {
+            taskID = existingTaskID
+        } else {
+            taskID = await createAgentTask(
+                directive: directive,
+                input: input,
+                request: request,
+                providerID: providerID,
+                providerName: providerName
+            )
+        }
+        activeAssistantTaskID = taskID
+        defer {
+            if activeAssistantTaskID == taskID {
+                activeAssistantTaskID = nil
+            }
+        }
+
         let provider: any AgentProvider
         do {
             provider = try await resolver.agentProvider(id: providerID)
             try checkTurnStillActive(request.turnID)
+            await recordTaskEvent(
+                taskID,
+                kind: .providerResolved,
+                turnID: request.turnID,
+                phase: "providerResolution",
+                summary: "Using \(providerName)."
+            )
         } catch {
             if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
+                await recordTaskEvent(
+                    taskID,
+                    kind: .cancelled,
+                    status: .cancelled,
+                    turnID: request.turnID,
+                    phase: "providerResolution",
+                    summary: "Cancelled before \(providerName) started."
+                )
                 throw RocaError.cancelled
             }
             let message = "I couldn't start \(providerName): \(error.localizedDescription)"
+            await recordTaskFailure(
+                taskID,
+                turnID: request.turnID,
+                phase: "providerResolution",
+                message: message,
+                error: error
+            )
             let id = appendAssistantMessage(message, status: .failed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .failed)
             try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
@@ -772,6 +890,19 @@ public actor DefaultAssistantSessionOrchestrator {
         let resolvedProject: (project: ProjectIdentity?, shouldContinue: Bool)
         if let resolvedProjectOverride {
             resolvedProject = (resolvedProjectOverride, true)
+            await recordTaskEvent(
+                taskID,
+                kind: .projectResolved,
+                turnID: request.turnID,
+                phase: "projectClarification",
+                summary: "Resolved project \(resolvedProjectOverride.displayName).",
+                metadata: [
+                    "projectID": resolvedProjectOverride.id.rawValue,
+                    "projectPath": resolvedProjectOverride.localPath
+                ]
+            ) { task in
+                task.resolvedProject = resolvedProjectOverride
+            }
         } else {
             resolvedProject = try await resolveProject(
                 for: directive,
@@ -779,6 +910,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 providerName: providerName,
                 provider: provider,
                 request: request,
+                taskID: taskID,
                 timing: &timing
             )
         }
@@ -800,6 +932,21 @@ public actor DefaultAssistantSessionOrchestrator {
             let runID = AgentRunID.make()
             activeAgentProvider = provider
             activeAgentRunID = runID
+            await recordTaskEvent(
+                taskID,
+                kind: .providerRunStarted,
+                status: .running,
+                turnID: request.turnID,
+                phase: "agentRun",
+                summary: "\(providerName) started.",
+                metadata: [
+                    "agentRunID": runID.rawValue,
+                    "agentMode": directive.mode.rawValue
+                ]
+            ) { task in
+                task.providerRunID = runID
+                task.resolvedProject = resolvedProject.project
+            }
             let agentRunRequest = AgentRunRequest(
                 runID: runID,
                 prompt: directive.prompt,
@@ -842,13 +989,40 @@ public actor DefaultAssistantSessionOrchestrator {
                 case .toolActivity:
                     continue
                 case .approvalRequired:
+                    await recordTaskEvent(
+                        taskID,
+                        kind: .approvalRequested,
+                        status: .waitingForApproval,
+                        turnID: request.turnID,
+                        phase: "approval",
+                        summary: "\(providerName) requested approval."
+                    )
                     completeMessage(actionID, text: "Waiting for approval.", status: .streaming)
                 case .final(let response):
                     finalText = response.text
                     didFinish = true
+                    await recordTaskEvent(
+                        taskID,
+                        kind: .providerRunFinished,
+                        status: .running,
+                        turnID: request.turnID,
+                        phase: "agentRun",
+                        summary: "\(providerName) returned a result.",
+                        metadata: response.metadata
+                    ) { task in
+                        task.providerSessionID = response.metadata["threadID"] ?? response.metadata["threadId"]
+                    }
                 case .cancelled:
                     completeMessage(actionID, text: "\(providerName) cancelled.", status: .cancelled)
                     rememberAssistantObservation("\(providerName) was cancelled.")
+                    await recordTaskEvent(
+                        taskID,
+                        kind: .cancelled,
+                        status: .cancelled,
+                        turnID: request.turnID,
+                        phase: "agentRun",
+                        summary: "\(providerName) cancelled."
+                    )
                     wasCancelled = true
                 }
             }
@@ -868,6 +1042,14 @@ public actor DefaultAssistantSessionOrchestrator {
                 directiveType: .runAgent,
                 brainRole: .generalChat
             )
+            await recordTaskEvent(
+                taskID,
+                kind: .resultFormattingStarted,
+                status: .formattingResult,
+                turnID: request.turnID,
+                phase: "agentResultFormatting",
+                summary: "Formatting \(providerName)'s result."
+            )
             var response: AssistantResponseContent
             if rawAgentText.isEmpty {
                 response = AssistantResponseContent(
@@ -875,6 +1057,14 @@ public actor DefaultAssistantSessionOrchestrator {
                     detailsMarkdown: nil
                 )
                 completeMessage(assistantMessageID, text: response.bubbleText, status: .completed)
+                await recordTaskEvent(
+                    taskID,
+                    kind: .resultFormatted,
+                    status: .formattingResult,
+                    turnID: request.turnID,
+                    phase: "agentResultFormatting",
+                    summary: response.bubbleText
+                )
             } else {
                 timing.responseBrainStartedAt = Date()
                 do {
@@ -920,6 +1110,14 @@ public actor DefaultAssistantSessionOrchestrator {
                     detailsMarkdown: response.detailsMarkdown,
                     status: .completed
                 )
+                await recordTaskEvent(
+                    taskID,
+                    kind: .resultFormatted,
+                    status: .formattingResult,
+                    turnID: request.turnID,
+                    phase: "agentResultFormatting",
+                    summary: response.bubbleText
+                )
             }
             let contextPacket = AssistantContextPacket(
                 currentTask: AssistantAgentTaskContext(
@@ -948,6 +1146,19 @@ public actor DefaultAssistantSessionOrchestrator {
                 contextPacket: contextPacket
             )
             try await speak(response.bubbleText, request: request, timing: &timing)
+            let resultSummary = response.bubbleText
+            let resultDetailsMarkdown = response.detailsMarkdown
+            await recordTaskEvent(
+                taskID,
+                kind: .completed,
+                status: .completed,
+                turnID: request.turnID,
+                phase: "finish",
+                summary: resultSummary
+            ) { task in
+                task.resultSummary = resultSummary
+                task.resultDetailsMarkdown = resultDetailsMarkdown
+            }
             emitDiagnostic(
                 kind: .agentRunCompleted,
                 turnID: request.turnID,
@@ -966,6 +1177,13 @@ public actor DefaultAssistantSessionOrchestrator {
         } catch RocaError.approvalRequired(let detail) {
             timing.actionFinishedAt = Date()
             let message = "I need approval before I hand this to \(providerName): \(detail)"
+            await recordTaskFailure(
+                taskID,
+                turnID: request.turnID,
+                phase: "approval",
+                message: message,
+                error: RocaError.approvalRequired(detail)
+            )
             completeMessage(actionID, text: message, status: .failed)
             rememberAssistantObservation(message)
             emitDiagnostic(
@@ -981,9 +1199,24 @@ public actor DefaultAssistantSessionOrchestrator {
         } catch {
             timing.actionFinishedAt = Date()
             if Self.isCancellation(error) {
+                await recordTaskEvent(
+                    taskID,
+                    kind: .cancelled,
+                    status: .cancelled,
+                    turnID: request.turnID,
+                    phase: "agentRun",
+                    summary: "\(providerName) was cancelled."
+                )
                 throw error
             }
             let message = "I couldn't finish that with \(providerName): \(error.localizedDescription)"
+            await recordTaskFailure(
+                taskID,
+                turnID: request.turnID,
+                phase: "agentRun",
+                message: message,
+                error: error
+            )
             completeMessage(actionID, text: message, status: .failed)
             rememberAssistantObservation(message)
             emitDiagnostic(
@@ -1005,12 +1238,23 @@ public actor DefaultAssistantSessionOrchestrator {
         providerName: String,
         provider: any AgentProvider,
         request: AssistantSessionTurnRequest,
+        taskID: AssistantTaskID,
         timing: inout AssistantTurnTimingBuilder
     ) async throws -> (project: ProjectIdentity?, shouldContinue: Bool) {
         guard let projectName = directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !projectName.isEmpty
         else {
             return (nil, true)
+        }
+        await recordTaskEvent(
+            taskID,
+            kind: .projectResolutionStarted,
+            status: .resolvingProject,
+            turnID: request.turnID,
+            phase: "projectLookup",
+            summary: "Resolving \(projectName)."
+        ) { task in
+            task.projectQuery = projectName
         }
 
         let excludedProjectNames = Self.excludedProjectNames(from: userInput)
@@ -1024,13 +1268,36 @@ public actor DefaultAssistantSessionOrchestrator {
                provider is any AgentProjectDiscovering {
                 broadLocalMatch = project
             } else {
+                await recordTaskEvent(
+                    taskID,
+                    kind: .projectResolved,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    summary: "Resolved project \(project.displayName).",
+                    metadata: [
+                        "projectID": project.id.rawValue,
+                        "projectPath": project.localPath
+                    ]
+                ) { task in
+                    task.resolvedProject = project
+                }
                 return (project, true)
             }
         case .ambiguous(_, let candidates):
             let message = Self.projectClarificationQuestion(for: candidates)
+            await recordTaskEvent(
+                taskID,
+                kind: .clarificationRequested,
+                status: .waitingForClarification,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                summary: message,
+                metadata: ["candidateCount": String(candidates.count)]
+            )
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             storePendingProjectClarification(
+                taskID: taskID,
                 directive: directive,
                 originalUserInput: userInput,
                 query: projectName,
@@ -1068,6 +1335,20 @@ public actor DefaultAssistantSessionOrchestrator {
                 case .resolved(let project):
                     try? await projectWriter?.upsert(project)
                     try checkTurnStillActive(request.turnID)
+                    await recordTaskEvent(
+                        taskID,
+                        kind: .projectResolved,
+                        turnID: request.turnID,
+                        phase: "projectLookup",
+                        summary: "Resolved project \(project.displayName).",
+                        metadata: [
+                            "projectID": project.id.rawValue,
+                            "projectPath": project.localPath,
+                            "candidateCount": String(candidates.count)
+                        ]
+                    ) { task in
+                        task.resolvedProject = project
+                    }
                     completeMessage(lookupID, text: "Found \(project.displayName).", status: .completed)
                     rememberAssistantObservation("Found \(project.displayName) in \(providerName).")
                     emitDiagnostic(
@@ -1083,9 +1364,19 @@ public actor DefaultAssistantSessionOrchestrator {
                 case .ambiguous(_, let candidates):
                     completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
                     let message = Self.projectClarificationQuestion(for: candidates)
+                    await recordTaskEvent(
+                        taskID,
+                        kind: .clarificationRequested,
+                        status: .waitingForClarification,
+                        turnID: request.turnID,
+                        phase: "projectLookup",
+                        summary: message,
+                        metadata: ["candidateCount": String(candidates.count)]
+                    )
                     let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
                     completeMessage(id, text: message, status: .completed)
                     storePendingProjectClarification(
+                        taskID: taskID,
                         directive: directive,
                         originalUserInput: userInput,
                         query: projectName,
@@ -1106,6 +1397,12 @@ public actor DefaultAssistantSessionOrchestrator {
                     try await speak(message, request: request, timing: &timing)
                     return (nil, false)
                 case .missing:
+                    await recordTaskFailure(
+                        taskID,
+                        turnID: request.turnID,
+                        phase: "projectLookup",
+                        message: "No \(providerName) project match found."
+                    )
                     completeMessage(lookupID, text: "No \(providerName) project match found.", status: .completed)
                     emitDiagnostic(
                         kind: .agentProjectLookupCompleted,
@@ -1119,6 +1416,13 @@ public actor DefaultAssistantSessionOrchestrator {
                 }
             } catch {
                 completeMessage(lookupID, text: "\(providerName) project lookup failed.", status: .failed)
+                await recordTaskFailure(
+                    taskID,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    message: "\(providerName) project lookup failed.",
+                    error: error
+                )
                 emitDiagnostic(
                     kind: .agentProjectLookupFailed,
                     turnID: request.turnID,
@@ -1140,6 +1444,15 @@ public actor DefaultAssistantSessionOrchestrator {
 
         if let broadLocalMatch {
             let message = "I only know \(broadLocalMatch.displayName) for \(projectName). Please name the project more exactly before I hand this to \(providerName)."
+            await recordTaskEvent(
+                taskID,
+                kind: .clarificationRequested,
+                status: .waitingForClarification,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                summary: message,
+                metadata: ["projectID": broadLocalMatch.id.rawValue]
+            )
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
@@ -1148,6 +1461,12 @@ public actor DefaultAssistantSessionOrchestrator {
         }
 
         let message = "I don't know the \(projectName) project folder yet. Please give me the local folder before I hand this to \(providerName)."
+        await recordTaskFailure(
+            taskID,
+            turnID: request.turnID,
+            phase: "projectLookup",
+            message: message
+        )
         let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
         completeMessage(id, text: message, status: .completed)
         rememberAssistantObservation(message)
@@ -1156,6 +1475,7 @@ public actor DefaultAssistantSessionOrchestrator {
     }
 
     private func storePendingProjectClarification(
+        taskID: AssistantTaskID,
         directive: AgentDirectiveRequest,
         originalUserInput: String,
         query: String,
@@ -1164,6 +1484,7 @@ public actor DefaultAssistantSessionOrchestrator {
         request: AssistantSessionTurnRequest
     ) {
         pendingProjectClarification = PendingProjectClarification(
+            taskID: taskID,
             directive: directive,
             originalUserInput: originalUserInput,
             query: query,
@@ -1529,6 +1850,16 @@ public actor DefaultAssistantSessionOrchestrator {
             cancelledTurnIDs.insert(activeBrainRequestID)
             await activeBrainProvider?.cancel(activeBrainRequestID)
         }
+        if let activeAssistantTaskID {
+            await recordTaskEvent(
+                activeAssistantTaskID,
+                kind: .cancelled,
+                status: .cancelled,
+                turnID: activeTurnID,
+                phase: "cancel",
+                summary: "Assistant cancelled."
+            )
+        }
         if let activeAgentRunID {
             await activeAgentProvider?.cancel(activeAgentRunID)
         }
@@ -1536,6 +1867,7 @@ public actor DefaultAssistantSessionOrchestrator {
         activeBrainRequestID = nil
         activeAgentProvider = nil
         activeAgentRunID = nil
+        activeAssistantTaskID = nil
         await speechOrchestrator.stopSpeaking()
     }
 
@@ -1558,6 +1890,80 @@ public actor DefaultAssistantSessionOrchestrator {
         }
         conversationMessages.append(BrainMessage(role: .assistant, content: "Roca action/status: \(trimmed)"))
         trimConversationMessages()
+    }
+
+    private func createAgentTask(
+        directive: AgentDirectiveRequest,
+        input: String,
+        request: AssistantSessionTurnRequest,
+        providerID: ProviderID,
+        providerName: String
+    ) async -> AssistantTaskID {
+        let record = AssistantTaskRecord(
+            turnID: request.turnID,
+            userRequest: input,
+            capabilityID: CapabilityID(rawValue: providerID.rawValue),
+            providerID: providerID,
+            providerName: providerName,
+            mode: directive.mode,
+            projectQuery: directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            diagnosticCorrelationID: request.turnID.rawValue
+        )
+        let task = await taskLedger.createTask(record)
+        return task.id
+    }
+
+    private func recordTaskEvent(
+        _ taskID: AssistantTaskID?,
+        kind: AssistantTaskEventKind,
+        status: AssistantTaskStatus? = nil,
+        turnID: BrainRequestID? = nil,
+        phase: String? = nil,
+        summary: String? = nil,
+        metadata: [String: String] = [:],
+        mutate: @Sendable (inout AssistantTaskRecord) -> Void = { _ in }
+    ) async {
+        guard let taskID else {
+            return
+        }
+        await taskLedger.updateTask(
+            taskID,
+            status: status,
+            event: AssistantTaskEvent(
+                kind: kind,
+                turnID: turnID,
+                status: status,
+                phase: phase,
+                summary: summary,
+                metadata: metadata
+            ),
+            mutate: mutate
+        )
+    }
+
+    private func recordTaskFailure(
+        _ taskID: AssistantTaskID?,
+        turnID: BrainRequestID,
+        phase: String,
+        message: String,
+        error: Error? = nil
+    ) async {
+        var metadata: [String: String] = [:]
+        if let error {
+            metadata["errorType"] = Self.diagnosticErrorType(error)
+        }
+        await recordTaskEvent(
+            taskID,
+            kind: .failed,
+            status: .failed,
+            turnID: turnID,
+            phase: phase,
+            summary: message,
+            metadata: metadata
+        ) { task in
+            task.failurePhase = phase
+            task.failureMessage = message
+        }
     }
 
     private func trimConversationMessages() {
@@ -1833,6 +2239,9 @@ public actor DefaultAssistantSessionOrchestrator {
         extra: [String: String] = [:]
     ) -> [String: String] {
         var metadata = extra
+        if let activeAssistantTaskID {
+            metadata["taskID"] = activeAssistantTaskID.rawValue
+        }
         metadata["inputMode"] = request.inputMode.rawValue
         metadata["outputMode"] = request.outputMode.rawValue
         let routerSelection = request.selection(for: .companionRouter)
@@ -2366,6 +2775,7 @@ private struct ActiveAssistantSessionListeningSession: Sendable {
 }
 
 private struct PendingProjectClarification: Sendable {
+    var taskID: AssistantTaskID
     var directive: AgentDirectiveRequest
     var originalUserInput: String
     var query: String

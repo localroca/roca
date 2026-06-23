@@ -112,6 +112,7 @@ public struct InteractionEvalRecord: Codable, Equatable, Sendable {
     public var agentRequests: [InteractionAgentRequestRecord]
     public var projectWrites: [ProjectIdentity]
     public var diagnostics: [AssistantDiagnosticEvent]
+    public var assistantTasks: [AssistantTaskRecord]
     public var brainRequests: [InteractionBrainRequestRecord]
 
     public init(
@@ -133,6 +134,7 @@ public struct InteractionEvalRecord: Codable, Equatable, Sendable {
         agentRequests: [InteractionAgentRequestRecord],
         projectWrites: [ProjectIdentity],
         diagnostics: [AssistantDiagnosticEvent],
+        assistantTasks: [AssistantTaskRecord],
         brainRequests: [InteractionBrainRequestRecord]
     ) {
         self.runID = runID
@@ -153,6 +155,7 @@ public struct InteractionEvalRecord: Codable, Equatable, Sendable {
         self.agentRequests = agentRequests
         self.projectWrites = projectWrites
         self.diagnostics = diagnostics
+        self.assistantTasks = assistantTasks
         self.brainRequests = brainRequests
     }
 }
