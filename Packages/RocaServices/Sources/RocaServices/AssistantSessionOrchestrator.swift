@@ -28,8 +28,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private let speechOrchestrator: any SpeechOrchestrating
     private let applicationCommands: any ApplicationCommandExecuting
     private let contextProvider: any AssistantContextProviding
-    private let projectCatalog: (any ProjectIdentityCatalog)?
-    private let projectWriter: (any ProjectIdentityWriting)?
+    private let workspaceResolver: WorkspaceResolutionService
     private let taskLedger: any AssistantTaskLedger
     private let readSelectionCommand: ReadSelectionCommand?
     private let companionState: CompanionStateCenter?
@@ -147,8 +146,8 @@ public actor DefaultAssistantSessionOrchestrator {
         self.speechOrchestrator = speechOrchestrator
         self.applicationCommands = applicationCommands
         self.contextProvider = contextProvider
-        self.projectCatalog = projectCatalog
-        self.projectWriter = projectWriter ?? (projectCatalog as? any ProjectIdentityWriting)
+        let resolvedProjectWriter = projectWriter ?? (projectCatalog as? any ProjectIdentityWriting)
+        self.workspaceResolver = WorkspaceResolutionService(catalog: projectCatalog, writer: resolvedProjectWriter)
         self.taskLedger = taskLedger
         self.readSelectionCommand = readSelectionCommand
         self.companionState = companionState
@@ -1258,31 +1257,30 @@ public actor DefaultAssistantSessionOrchestrator {
         }
 
         let excludedProjectNames = Self.excludedProjectNames(from: userInput)
-        let allProjects = try await projectCatalog?.projects() ?? []
-        let projects = allProjects.filter { !Self.project($0, matchesAny: excludedProjectNames) }
         try checkTurnStillActive(request.turnID)
-        var broadLocalMatch: ProjectIdentity?
-        switch ProjectIdentityResolver(projects: projects).resolve(projectName) {
+        let discoverer = provider as? any AgentProjectDiscovering
+        let localResolution = try await workspaceResolver.resolveLocal(
+            query: projectName,
+            shouldVerifyBroadMatchWithProvider: discoverer != nil,
+            excluding: excludedProjectNames
+        )
+        try checkTurnStillActive(request.turnID)
+        switch localResolution {
         case .resolved(let project):
-            if Self.shouldVerifyBroadProjectResolution(query: projectName, resolvedProject: project),
-               provider is any AgentProjectDiscovering {
-                broadLocalMatch = project
-            } else {
-                await recordTaskEvent(
-                    taskID,
-                    kind: .projectResolved,
-                    turnID: request.turnID,
-                    phase: "projectLookup",
-                    summary: "Resolved project \(project.displayName).",
-                    metadata: [
-                        "projectID": project.id.rawValue,
-                        "projectPath": project.localPath
-                    ]
-                ) { task in
-                    task.resolvedProject = project
-                }
-                return (project, true)
+            await recordTaskEvent(
+                taskID,
+                kind: .projectResolved,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                summary: "Resolved project \(project.displayName).",
+                metadata: [
+                    "projectID": project.id.rawValue,
+                    "projectPath": project.localPath
+                ]
+            ) { task in
+                task.resolvedProject = project
             }
+            return (project, true)
         case .ambiguous(_, let candidates):
             let message = Self.projectClarificationQuestion(for: candidates)
             await recordTaskEvent(
@@ -1308,158 +1306,243 @@ public actor DefaultAssistantSessionOrchestrator {
             rememberAssistantObservation(message)
             try await speak(message, request: request, timing: &timing)
             return (nil, false)
-        case .missing:
-            break
-        }
-
-        if let discoverer = provider as? any AgentProjectDiscovering {
-            let lookupID = appendActionMessage("Looking for \(projectName) in \(providerName)...", status: .pending, request: request, directiveType: .runAgent)
-            emitDiagnostic(
-                kind: .agentProjectLookupStarted,
-                turnID: request.turnID,
-                phase: "projectLookup",
-                providerID: directive.resolvedProviderID,
-                directiveType: .runAgent,
-                metadata: diagnosticMetadata(for: request, extra: ["projectQueryPresent": "true"])
-            )
-            do {
-                let candidates = try await discoverer.discoverProjects(
-                    matching: ProjectDiscoveryQuery(projectName: projectName, prompt: directive.prompt)
-                )
-                try checkTurnStillActive(request.turnID)
-                switch Self.discoveryResolution(
-                    for: candidates,
-                    query: projectName,
-                    excluding: excludedProjectNames
-                ) {
-                case .resolved(let project):
-                    try? await projectWriter?.upsert(project)
-                    try checkTurnStillActive(request.turnID)
-                    await recordTaskEvent(
-                        taskID,
-                        kind: .projectResolved,
-                        turnID: request.turnID,
-                        phase: "projectLookup",
-                        summary: "Resolved project \(project.displayName).",
-                        metadata: [
-                            "projectID": project.id.rawValue,
-                            "projectPath": project.localPath,
-                            "candidateCount": String(candidates.count)
-                        ]
-                    ) { task in
-                        task.resolvedProject = project
-                    }
-                    completeMessage(lookupID, text: "Found \(project.displayName).", status: .completed)
-                    rememberAssistantObservation("Found \(project.displayName) in \(providerName).")
-                    emitDiagnostic(
-                        kind: .agentProjectLookupCompleted,
-                        turnID: request.turnID,
-                        phase: "projectLookup",
-                        providerID: directive.resolvedProviderID,
-                        directiveType: .runAgent,
-                        outcome: "resolved",
-                        metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
-                    )
-                    return (project, true)
-                case .ambiguous(_, let candidates):
-                    completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
-                    let message = Self.projectClarificationQuestion(for: candidates)
-                    await recordTaskEvent(
-                        taskID,
-                        kind: .clarificationRequested,
-                        status: .waitingForClarification,
-                        turnID: request.turnID,
-                        phase: "projectLookup",
-                        summary: message,
-                        metadata: ["candidateCount": String(candidates.count)]
-                    )
-                    let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
-                    completeMessage(id, text: message, status: .completed)
-                    storePendingProjectClarification(
+        case .needsProviderDiscovery(let broadLocalMatch):
+            guard let discoverer else {
+                if let broadLocalMatch {
+                    return try await askForMoreSpecificProject(
+                        broadLocalMatch,
+                        projectName: projectName,
+                        providerName: providerName,
+                        request: request,
                         taskID: taskID,
-                        directive: directive,
-                        originalUserInput: userInput,
-                        query: projectName,
-                        candidates: candidates,
-                        questionMessageID: id,
-                        request: request
-                    )
-                    rememberAssistantObservation(message)
-                    emitDiagnostic(
-                        kind: .agentProjectLookupCompleted,
-                        turnID: request.turnID,
-                        phase: "projectLookup",
-                        providerID: directive.resolvedProviderID,
-                        directiveType: .runAgent,
-                        outcome: "ambiguous",
-                        metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
-                    )
-                    try await speak(message, request: request, timing: &timing)
-                    return (nil, false)
-                case .missing:
-                    await recordTaskFailure(
-                        taskID,
-                        turnID: request.turnID,
-                        phase: "projectLookup",
-                        message: "No \(providerName) project match found."
-                    )
-                    completeMessage(lookupID, text: "No \(providerName) project match found.", status: .completed)
-                    emitDiagnostic(
-                        kind: .agentProjectLookupCompleted,
-                        turnID: request.turnID,
-                        phase: "projectLookup",
-                        providerID: directive.resolvedProviderID,
-                        directiveType: .runAgent,
-                        outcome: "missing",
-                        metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                        timing: &timing
                     )
                 }
-            } catch {
-                completeMessage(lookupID, text: "\(providerName) project lookup failed.", status: .failed)
+                return try await askForMissingProjectFolder(
+                    projectName: projectName,
+                    providerName: providerName,
+                    request: request,
+                    taskID: taskID,
+                    timing: &timing
+                )
+            }
+
+            return try await resolveProjectFromProviderDiscovery(
+                directive: directive,
+                userInput: userInput,
+                projectName: projectName,
+                prompt: directive.prompt,
+                excludedProjectNames: excludedProjectNames,
+                providerName: providerName,
+                providerID: directive.resolvedProviderID,
+                discoverer: discoverer,
+                broadLocalMatch: broadLocalMatch,
+                request: request,
+                taskID: taskID,
+                timing: &timing
+            )
+        }
+    }
+
+    private func resolveProjectFromProviderDiscovery(
+        directive: AgentDirectiveRequest,
+        userInput: String,
+        projectName: String,
+        prompt: String,
+        excludedProjectNames: [String],
+        providerName: String,
+        providerID: ProviderID?,
+        discoverer: any AgentProjectDiscovering,
+        broadLocalMatch: ProjectIdentity?,
+        request: AssistantSessionTurnRequest,
+        taskID: AssistantTaskID,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> (project: ProjectIdentity?, shouldContinue: Bool) {
+        let lookupID = appendActionMessage("Looking for \(projectName) in \(providerName)...", status: .pending, request: request, directiveType: .runAgent)
+        emitDiagnostic(
+            kind: .agentProjectLookupStarted,
+            turnID: request.turnID,
+            phase: "projectLookup",
+            providerID: providerID,
+            directiveType: .runAgent,
+            metadata: diagnosticMetadata(for: request, extra: ["projectQueryPresent": "true"])
+        )
+        do {
+            let outcome = try await workspaceResolver.resolveFromProvider(
+                query: projectName,
+                prompt: prompt,
+                discoverer: discoverer,
+                excluding: excludedProjectNames
+            )
+            try checkTurnStillActive(request.turnID)
+            switch outcome {
+            case .resolved(let resolved):
+                let project = resolved.project
+                let candidateCount = resolved.candidateCount ?? 0
+                await recordTaskEvent(
+                    taskID,
+                    kind: .projectResolved,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    summary: "Resolved project \(project.displayName).",
+                    metadata: [
+                        "projectID": project.id.rawValue,
+                        "projectPath": project.localPath,
+                        "candidateCount": String(candidateCount)
+                    ]
+                ) { task in
+                    task.resolvedProject = project
+                }
+                completeMessage(lookupID, text: "Found \(project.displayName).", status: .completed)
+                rememberAssistantObservation("Found \(project.displayName) in \(providerName).")
+                emitDiagnostic(
+                    kind: .agentProjectLookupCompleted,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    providerID: providerID,
+                    directiveType: .runAgent,
+                    outcome: "resolved",
+                    metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidateCount)])
+                )
+                return (project, true)
+            case .ambiguous(_, let candidates, _):
+                completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
+                let message = Self.projectClarificationQuestion(for: candidates)
+                await recordTaskEvent(
+                    taskID,
+                    kind: .clarificationRequested,
+                    status: .waitingForClarification,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    summary: message,
+                    metadata: ["candidateCount": String(candidates.count)]
+                )
+                let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+                completeMessage(id, text: message, status: .completed)
+                storePendingProjectClarification(
+                    taskID: taskID,
+                    directive: directive,
+                    originalUserInput: userInput,
+                    query: projectName,
+                    candidates: candidates,
+                    questionMessageID: id,
+                    request: request
+                )
+                rememberAssistantObservation(message)
+                emitDiagnostic(
+                    kind: .agentProjectLookupCompleted,
+                    turnID: request.turnID,
+                    phase: "projectLookup",
+                    providerID: providerID,
+                    directiveType: .runAgent,
+                    outcome: "ambiguous",
+                    metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                )
+                try await speak(message, request: request, timing: &timing)
+                return (nil, false)
+            case .missing(_, _, let candidateCount):
                 await recordTaskFailure(
                     taskID,
                     turnID: request.turnID,
                     phase: "projectLookup",
-                    message: "\(providerName) project lookup failed.",
-                    error: error
+                    message: "No \(providerName) project match found."
                 )
+                completeMessage(lookupID, text: "No \(providerName) project match found.", status: .completed)
                 emitDiagnostic(
-                    kind: .agentProjectLookupFailed,
+                    kind: .agentProjectLookupCompleted,
                     turnID: request.turnID,
                     phase: "projectLookup",
-                    providerID: directive.resolvedProviderID,
+                    providerID: providerID,
                     directiveType: .runAgent,
-                    outcome: AssistantTurnOutcome.failed.rawValue,
-                    metadata: diagnosticMetadata(for: request, error: error, extra: ["projectQueryPresent": "true"])
+                    outcome: "missing",
+                    metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidateCount ?? 0)])
                 )
-                // Discovery is a convenience fallback. If it fails, ask for the folder.
-                let message = "I couldn't read \(providerName)'s project list in time, so I don't know the \(projectName) project folder yet. Please give me the local folder or try again."
-                let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
-                completeMessage(id, text: message, status: .completed)
-                rememberAssistantObservation(message)
-                try await speak(message, request: request, timing: &timing)
-                return (nil, false)
+                if let broadLocalMatch {
+                    return try await askForMoreSpecificProject(
+                        broadLocalMatch,
+                        projectName: projectName,
+                        providerName: providerName,
+                        request: request,
+                        taskID: taskID,
+                        timing: &timing
+                    )
+                }
+                return try await askForMissingProjectFolder(
+                    projectName: projectName,
+                    providerName: providerName,
+                    request: request,
+                    taskID: taskID,
+                    timing: &timing
+                )
+            case .needsMoreSpecificQuery(_, let broadMatch):
+                return try await askForMoreSpecificProject(
+                    broadMatch,
+                    projectName: projectName,
+                    providerName: providerName,
+                    request: request,
+                    taskID: taskID,
+                    timing: &timing
+                )
             }
-        }
-
-        if let broadLocalMatch {
-            let message = "I only know \(broadLocalMatch.displayName) for \(projectName). Please name the project more exactly before I hand this to \(providerName)."
-            await recordTaskEvent(
+        } catch {
+            completeMessage(lookupID, text: "\(providerName) project lookup failed.", status: .failed)
+            await recordTaskFailure(
                 taskID,
-                kind: .clarificationRequested,
-                status: .waitingForClarification,
                 turnID: request.turnID,
                 phase: "projectLookup",
-                summary: message,
-                metadata: ["projectID": broadLocalMatch.id.rawValue]
+                message: "\(providerName) project lookup failed.",
+                error: error
             )
+            emitDiagnostic(
+                kind: .agentProjectLookupFailed,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                providerID: providerID,
+                directiveType: .runAgent,
+                outcome: AssistantTurnOutcome.failed.rawValue,
+                metadata: diagnosticMetadata(for: request, error: error, extra: ["projectQueryPresent": "true"])
+            )
+            let message = "I couldn't read \(providerName)'s project list in time, so I don't know the \(projectName) project folder yet. Please give me the local folder or try again."
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
             try await speak(message, request: request, timing: &timing)
             return (nil, false)
         }
+    }
 
+    private func askForMoreSpecificProject(
+        _ broadLocalMatch: ProjectIdentity,
+        projectName: String,
+        providerName: String,
+        request: AssistantSessionTurnRequest,
+        taskID: AssistantTaskID,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> (project: ProjectIdentity?, shouldContinue: Bool) {
+        let message = "I only know \(broadLocalMatch.displayName) for \(projectName). Please name the project more exactly before I hand this to \(providerName)."
+        await recordTaskEvent(
+            taskID,
+            kind: .clarificationRequested,
+            status: .waitingForClarification,
+            turnID: request.turnID,
+            phase: "projectLookup",
+            summary: message,
+            metadata: ["projectID": broadLocalMatch.id.rawValue]
+        )
+        let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+        completeMessage(id, text: message, status: .completed)
+        rememberAssistantObservation(message)
+        try await speak(message, request: request, timing: &timing)
+        return (nil, false)
+    }
+
+    private func askForMissingProjectFolder(
+        projectName: String,
+        providerName: String,
+        request: AssistantSessionTurnRequest,
+        taskID: AssistantTaskID,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> (project: ProjectIdentity?, shouldContinue: Bool) {
         let message = "I don't know the \(projectName) project folder yet. Please give me the local folder before I hand this to \(providerName)."
         await recordTaskFailure(
             taskID,
@@ -1527,93 +1610,6 @@ public actor DefaultAssistantSessionOrchestrator {
         }
 
         return contextualized
-    }
-
-    private static func discoveryResolution(
-        for candidates: [ProjectDiscoveryCandidate],
-        query: String,
-        excluding excludedProjectNames: [String] = []
-    ) -> ProjectResolution {
-        let usable = candidates
-            .filter { $0.confidence != .low }
-            .filter { !project($0.project, matchesAny: excludedProjectNames) }
-            .sorted {
-                if $0.score != $1.score {
-                    return $0.score > $1.score
-                }
-                return $0.project.displayName.localizedCaseInsensitiveCompare($1.project.displayName) == .orderedAscending
-            }
-        guard let best = usable.first else {
-            return .missing(query: query)
-        }
-        let broadMatches = broadDiscoveryMatches(for: query, candidates: usable)
-        if broadMatches.count > 1 {
-            return .ambiguous(query: query, candidates: broadMatches)
-        }
-        if let runnerUp = usable.dropFirst().first, best.score - runnerUp.score < 25 {
-            return .ambiguous(query: query, candidates: uniqueProjects(usable.map(\.project)))
-        }
-        return .resolved(best.project)
-    }
-
-    private static func shouldVerifyBroadProjectResolution(
-        query: String,
-        resolvedProject: ProjectIdentity
-    ) -> Bool {
-        let normalizedQuery = ProjectIdentityResolver.normalizedKey(query)
-        let queryTokens = normalizedQuery.split(separator: " ")
-        guard queryTokens.count == 1, let queryToken = queryTokens.first, queryToken.count <= 4 else {
-            return false
-        }
-        let names = intrinsicSearchNames(for: resolvedProject)
-        let hasExactIntrinsicName = names.contains { ProjectIdentityResolver.normalizedKey($0) == normalizedQuery }
-        guard !hasExactIntrinsicName else {
-            return false
-        }
-        let token = String(queryToken)
-        return names.contains { broadProjectNameMatches(queryToken: token, name: $0) }
-    }
-
-    private static func broadDiscoveryMatches(
-        for query: String,
-        candidates: [ProjectDiscoveryCandidate]
-    ) -> [ProjectIdentity] {
-        let normalizedQuery = ProjectIdentityResolver.normalizedKey(query)
-        let queryTokens = normalizedQuery.split(separator: " ")
-        guard queryTokens.count == 1, let queryToken = queryTokens.first, queryToken.count <= 4 else {
-            return []
-        }
-        let token = String(queryToken)
-        return uniqueProjects(candidates.compactMap { candidate in
-            intrinsicSearchNames(for: candidate.project).contains { name in
-                broadProjectNameMatches(queryToken: token, name: name)
-            } ? candidate.project : nil
-        })
-    }
-
-    private static func intrinsicSearchNames(for project: ProjectIdentity) -> [String] {
-        [project.displayName, project.localFolderName, project.gitRemoteName].compactMap { value in
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed?.isEmpty == false ? trimmed : nil
-        }
-    }
-
-    private static func broadProjectNameMatches(queryToken: String, name: String) -> Bool {
-        let normalizedName = ProjectIdentityResolver.normalizedKey(name)
-        guard !normalizedName.isEmpty else {
-            return false
-        }
-        if normalizedName == queryToken || normalizedName.hasPrefix("\(queryToken) ") {
-            return true
-        }
-        return normalizedName.split(separator: " ").contains { $0.hasPrefix(queryToken) }
-    }
-
-    private static func uniqueProjects(_ projects: [ProjectIdentity]) -> [ProjectIdentity] {
-        var seen = Set<String>()
-        return projects
-            .filter { seen.insert(ProjectIdentityResolver.normalizedKey($0.localPath)).inserted }
-            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
     private static func projectClarificationQuestion(for candidates: [ProjectIdentity]) -> String {
@@ -2553,21 +2549,6 @@ public actor DefaultAssistantSessionOrchestrator {
     private nonisolated static func excludedProjectNames(from input: String) -> [String] {
         let pattern = #"\bnot\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#
         return regexCaptures(in: input, pattern: pattern).compactMap { cleanProjectPhrase($0.value) }
-    }
-
-    private nonisolated static func project(_ project: ProjectIdentity, matchesAny rawNames: [String]) -> Bool {
-        rawNames.contains { rawName in
-            let normalizedName = ProjectIdentityResolver.normalizedKey(rawName)
-            guard !normalizedName.isEmpty else {
-                return false
-            }
-            return intrinsicSearchNames(for: project).contains { name in
-                let normalizedProjectName = ProjectIdentityResolver.normalizedKey(name)
-                return normalizedProjectName == normalizedName
-                    || normalizedProjectName.hasPrefix("\(normalizedName) ")
-                    || normalizedProjectName.split(separator: " ").contains { $0 == normalizedName }
-            }
-        }
     }
 
     private nonisolated static func repairedDirective(from rawText: String) -> AssistantDirective? {
