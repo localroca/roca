@@ -26,6 +26,117 @@ func assistantSessionTypedTurnAddsChatMessagesWithoutSpeech() async throws {
 }
 
 @Test
+func assistantSessionAnswersClaudeAuthSetupLocally() async throws {
+    let brain = ScriptedSessionBrainProvider(
+        directiveJSON: #"{"type":"runAgent","providerID":"claude-code","providerName":"Claude","prompt":"configure auth","mode":"ask"}"#,
+        responseText: ""
+    )
+    let agent = RecordingSessionAgentProvider(
+        id: "claude-code",
+        displayName: "Claude",
+        responseText: "unused"
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "I installed Claude Code, how do I sign in?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let assistant = try #require(await orchestrator.messageSnapshot.last(where: { $0.role == .assistant }))
+    #expect(assistant.status == .completed)
+    #expect(assistant.metadata?.directiveType == .respond)
+    #expect(assistant.text.contains("Settings"))
+    #expect(assistant.text.count < 120)
+    #expect(assistant.detailsMarkdown?.contains("Claude Code") == true)
+    #expect(assistant.detailsMarkdown?.contains("curl -fsSL https://claude.ai/install.sh | bash") == true)
+    #expect(assistant.detailsMarkdown?.contains("API key") == false)
+    #expect(assistant.detailsMarkdown?.contains("Keychain") == false)
+    #expect(assistant.detailsMarkdown?.contains("CLAUDE_CODE_USE_BEDROCK") == false)
+    #expect(await brain.recordedRequests.isEmpty)
+    #expect(await agent.recordedRequests.isEmpty)
+}
+
+@Test
+func assistantSessionInstallsClaudeCodeAfterApproval() async throws {
+    let brain = ScriptedSessionBrainProvider(
+        directiveJSON: #"{"type":"runAgent","providerID":"claude-code","providerName":"Claude","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#,
+        responseText: ""
+    )
+    let agent = SetupRequiredSessionAgentProvider(
+        displayName: "Claude Code",
+        summary: "Claude Code CLI is not installed."
+    )
+    let installer = RecordingProviderSetupInstaller(
+        result: ProviderSetupInstallResult(
+            exitCode: 0,
+            output: "installed ok",
+            postInstallNotes: ["Added ~/.local/bin to PATH in ~/.zshrc. Open a new Terminal and run `claude --version`."]
+        )
+    )
+    let speech = RecordingSessionSpeech()
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: speech,
+        contextProvider: StaticSessionContextProvider(),
+        providerSetupInstaller: installer,
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "Ask Claude in Uni Auth what passkey endpoints exist.",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    let setupFailure = try #require(await orchestrator.messageSnapshot.last(where: { $0.role == .assistant }))
+    #expect(setupFailure.text.contains("Claude Code CLI is not installed"))
+    #expect(setupFailure.detailsMarkdown?.contains("curl -fsSL https://claude.ai/install.sh | bash") == true)
+
+    let installTurn = Task {
+        await orchestrator.submitText(
+            "Can you install it for me?",
+            request: sessionRequest(inputMode: .voice, outputMode: .speakAll)
+        )
+    }
+    try await waitUntil {
+        await orchestrator.messageSnapshot.contains { $0.approvalRequest?.title == "Install Claude Code" }
+    }
+
+    let approvalMessage = try #require(await orchestrator.messageSnapshot.first { $0.approvalRequest?.title == "Install Claude Code" })
+    #expect(approvalMessage.approvalRequest?.allowsRememberedApproval == false)
+    #expect(approvalMessage.approvalRequest?.detail.contains("curl -fsSL https://claude.ai/install.sh | bash") == true)
+    #expect(approvalMessage.approvalRequest?.detail.contains("~/.local/bin") == true)
+
+    await orchestrator.submitAgentApprovalDecision(approvalMessage.id, decision: .approve)
+    await installTurn.value
+
+    #expect(await installer.requests == [
+        ProviderSetupInstallRequest(
+            providerID: ProviderID(rawValue: "claude-code"),
+            displayName: "Claude Code",
+            installCommand: "curl -fsSL https://claude.ai/install.sh | bash"
+        )
+    ])
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text == "Got it. I'll let you know once Claude Code is done installing." })
+    #expect(messages.contains { $0.role == .action && $0.text == "Claude Code installer finished." })
+    let assistant = try #require(messages.last(where: { $0.role == .assistant }))
+    #expect(assistant.text.contains("Claude Code installer finished"))
+    #expect(assistant.detailsMarkdown?.contains("installed ok") == true)
+    #expect(assistant.detailsMarkdown?.contains("Setup Notes") == true)
+    #expect(assistant.detailsMarkdown?.contains("~/.zshrc") == true)
+    #expect(await speech.spokenTexts.contains("Got it. I'll let you know once Claude Code is done installing."))
+}
+
+@Test
 func assistantSessionStructuredResponseSplitsBubbleAndDetails() async throws {
     let brain = ScriptedSessionBrainProvider(
         directiveJSON: #"{"type":"respond"}"#,
@@ -90,7 +201,7 @@ func assistantSessionMessagesIncludeBrainMetadata() async throws {
     #expect(user.metadata?.brainProviderID == ProviderID(rawValue: "test-brain"))
     #expect(user.metadata?.brainModelID == "test-model")
     #expect(user.metadata?.brainDisplayName == "Test Model")
-    #expect(user.metadata?.directivePromptVersion == "assistant-router-2026-06-15-v1")
+    #expect(user.metadata?.directivePromptVersion == "assistant-router-2026-06-26-v1")
     #expect(user.metadata?.responsePromptVersion == "companion-response-2026-06-14-v1")
     #expect(assistant.metadata?.directiveType == .respond)
     #expect(assistant.metadata?.brainModelID == "test-model")
@@ -455,6 +566,132 @@ func assistantSessionDiscoversMissingProjectThroughSelectedAgentProvider() async
     #expect(messages.contains { $0.role == .action && $0.text == "Found Uni Auth." && $0.status == .completed })
     #expect(messages.contains { $0.role == .action && $0.text == "Codex finished." && $0.status == .completed })
     #expect(messages.contains { $0.role == .assistant && $0.detailsMarkdown?.contains("POST /v1/auth/passkey/login/begin") == true })
+}
+
+@Test
+func assistantSessionUsesFolderHintToFindAmbiguousLocalProjects() async throws {
+    let work = try temporaryWorkspaceWorkFolderForSession()
+    try createProjectFolderForSession(named: "ter-admin", under: work)
+    try createProjectFolderForSession(named: "ter-backend", under: work)
+    try createProjectFolderForSession(named: "ter-web", under: work)
+    let writer = RecordingProjectWriter()
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runAgent","providerID":"claude-code","providerName":"Claude","projectName":"tear","prompt":"count README lines","mode":"ask"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"Claude counted the README lines.","detailsMarkdown":"README.md has 40 lines."}"###
+        ]
+    )
+    let agent = RecordingSessionAgentProvider(
+        id: "claude-code",
+        displayName: "Claude",
+        responseText: "README.md has 40 lines.",
+        discoveryCandidates: []
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([]),
+        projectWriter: writer,
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "Can we ask Claude to see how many lines are in the README for the tear project?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText("Not tear, the ter project", request: sessionRequest(outputMode: .textOnly))
+    await orchestrator.submitText(
+        "It should be somewhere in \(work.path)",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText("backend", request: sessionRequest(outputMode: .textOnly))
+
+    let requests = await agent.recordedRequests
+    #expect(requests.count == 1)
+    #expect(requests.first?.workspacePath == work.appendingPathComponent("ter-backend").path)
+    #expect(requests.first?.prompt == "count README lines")
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text == "I don't know the tear project folder yet. Please give me the local folder before I hand this to Claude." })
+    #expect(messages.contains { $0.role == .assistant && $0.text == "Got it, ter. Where should I look for that project folder?" })
+    #expect(messages.contains { $0.role == .assistant && $0.text == "Which project do you mean: TER Admin, TER Backend, TER Web?" })
+    #expect(messages.contains { $0.role == .assistant && $0.text == "I'll ask Claude to inspect TER Backend and summarize what it finds." })
+    #expect(await writer.upsertedProjects.map(\.displayName).contains("TER Backend"))
+}
+
+@Test
+func assistantSessionKeepsLargeProjectClarificationListsOutOfSpeech() async throws {
+    let work = try temporaryWorkspaceWorkFolderForSession()
+    let projectFolders = [
+        "dk-bhutan-admin-portal-v1-repo",
+        "dk-bhutan-architecture-repo",
+        "dk-bhutan-cdk-frontend-portals-repo",
+        "dk-bhutan-cdk-modules-repo",
+        "dk-bhutan-customer-risk-rating-repo",
+        "dk-bhutan-deposit-report-repo",
+        "dk-bhutan-digital-customer-form-repo",
+        "dk-bhutan-eod-portal-repo",
+        "dk-bhutan-external-api-gateway-repo",
+        "dk-bhutan-internal-birt-repo",
+        "dk-bhutan-keycloak-repo",
+        "dk-bhutan-loan-report-repo",
+        "dk-bhutan-payment-switch-repo",
+        "dk-bhutan-reports-repo"
+    ]
+    for folder in projectFolders {
+        try createProjectFolderForSession(named: folder, under: work)
+    }
+    let speech = RecordingSessionSpeech()
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runAgent","providerID":"claude-code","providerName":"Claude Code","projectName":"dk-bhutan","prompt":"count README lines","mode":"ask"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"Claude counted the README lines.","detailsMarkdown":"README.md has 22 lines."}"###
+        ]
+    )
+    let agent = RecordingSessionAgentProvider(
+        id: "claude-code",
+        displayName: "Claude Code",
+        responseText: "README.md has 22 lines.",
+        discoveryCandidates: []
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain, agent: agent),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: speech,
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([]),
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "Can you ask Claude how many lines are in the README for the dk-bhutan project?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText(
+        "It should be somewhere in \(work.path)",
+        request: sessionRequest(inputMode: .voice, outputMode: .speakAll)
+    )
+    await orchestrator.submitText("payment switch", request: sessionRequest(outputMode: .textOnly))
+
+    let messages = await orchestrator.messageSnapshot
+    let clarification = try #require(messages.first { $0.text == "I see 14 dk-bhutan projects. Which one are you talking about?" })
+    #expect(clarification.detailsMarkdown?.contains("## Matching Projects") == true)
+    #expect(clarification.detailsMarkdown?.contains("Showing 12 of 14") == true)
+    #expect(clarification.detailsMarkdown?.contains("- DK Bhutan Admin Portal V1 Repo") == true)
+    #expect(clarification.detailsMarkdown?.contains("Payment Switch") == false)
+    #expect(await speech.spokenTexts.contains("I see 14 dk-bhutan projects. Which one are you talking about?"))
+    #expect(await speech.spokenTexts.allSatisfy { !$0.contains("DK Bhutan Admin Portal V1 Repo") })
+
+    let request = try #require(await agent.recordedRequests.first)
+    #expect(request.workspacePath == work.appendingPathComponent("dk-bhutan-payment-switch-repo").path)
 }
 
 @Test
@@ -1093,6 +1330,63 @@ func assistantSessionPublishesAndResolvesAgentApprovalPrompt() async throws {
 }
 
 @Test
+func assistantSessionPublishesAndResolvesAgentQuestionPrompt() async throws {
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(directiveJSON: #"{"type":"respond"}"#, responseText: "Done.")
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        stopSpeech: {}
+    )
+    let prompt = AgentQuestionPrompt(
+        id: "question-prompt",
+        providerID: "claude-code",
+        title: "Claude needs input",
+        questions: [
+            AgentQuestion(
+                id: "approach",
+                header: "Approach",
+                question: "Which billing approach should Claude use?",
+                options: [
+                    AgentQuestionOption(id: "direct", label: "Direct Stripe", detail: "Use Stripe metering directly."),
+                    AgentQuestionOption(id: "ledger", label: "Internal Ledger", detail: "Track usage internally first.")
+                ]
+            )
+        ]
+    )
+
+    let responseTask = Task {
+        await orchestrator.requestAgentQuestionAnswer(for: prompt)
+    }
+    try await waitUntil {
+        await orchestrator.messageSnapshot.contains { $0.questionRequest?.prompt == prompt }
+    }
+
+    let pendingMessage = try #require(await orchestrator.messageSnapshot.first(where: { $0.questionRequest != nil }))
+    #expect(pendingMessage.role == .action)
+    #expect(pendingMessage.status == .pending)
+    #expect(pendingMessage.text == "Claude needs input")
+    #expect(pendingMessage.questionRequest?.prompt.questions.first?.options.count == 2)
+
+    let answer = AgentQuestionResponse(
+        answers: [
+            AgentQuestionAnswer(questionID: "approach", selectedOptionLabels: ["Internal Ledger"])
+        ]
+    )
+    await orchestrator.submitAgentQuestionResponse(pendingMessage.id, response: answer)
+    let response = await responseTask.value
+    let resolvedMessage = try #require(await orchestrator.messageSnapshot.first(where: { $0.id == pendingMessage.id }))
+
+    #expect(response == answer)
+    #expect(resolvedMessage.status == .completed)
+    #expect(resolvedMessage.text == "Answered.")
+    #expect(resolvedMessage.questionRequest?.response == answer)
+}
+
+@Test
 func assistantSessionCancelClearsActiveAgentTurnForRetry() async throws {
     let agent = HangingSessionAgentProvider()
     let orchestrator = DefaultAssistantSessionOrchestrator(
@@ -1255,6 +1549,34 @@ func assistantSessionCancelStopsAudioAndCancelsSTT() async throws {
 
 private enum TestTimeoutError: Error {
     case timedOut
+}
+
+private actor RecordingProviderSetupInstaller: ProviderSetupInstalling {
+    private(set) var requests: [ProviderSetupInstallRequest] = []
+    private let result: ProviderSetupInstallResult
+
+    init(result: ProviderSetupInstallResult) {
+        self.result = result
+    }
+
+    func install(_ request: ProviderSetupInstallRequest) async throws -> ProviderSetupInstallResult {
+        requests.append(request)
+        return result
+    }
+}
+
+private func temporaryWorkspaceWorkFolderForSession() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("roca-session-workspace-\(UUID().uuidString)", isDirectory: true)
+    let work = root.appendingPathComponent("Workspace/work", isDirectory: true)
+    try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+    return work
+}
+
+private func createProjectFolderForSession(named name: String, under parent: URL) throws {
+    let url = parent.appendingPathComponent(name, isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    try "# \(name)\n".write(to: url.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
 }
 
 private func value<T: Sendable>(from task: Task<T, Never>, timeout: Duration = .seconds(1)) async throws -> T {

@@ -31,6 +31,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private let workspaceResolver: WorkspaceResolutionService
     private let taskLedger: any AssistantTaskLedger
     private let readSelectionCommand: ReadSelectionCommand?
+    private let providerSetupInstaller: any ProviderSetupInstalling
     private let companionState: CompanionStateCenter?
     private let stopSpeech: StopSpeechHandler
 
@@ -59,6 +60,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private var metricsContinuations: [UUID: AsyncStream<AssistantTurnMetrics>.Continuation] = [:]
     private var diagnosticsContinuations: [UUID: AsyncStream<AssistantDiagnosticEvent>.Continuation] = [:]
     private var approvalContinuations: [ChatMessageID: CheckedContinuation<AgentApprovalDecision, Never>] = [:]
+    private var questionContinuations: [ChatMessageID: CheckedContinuation<AgentQuestionResponse, Never>] = [:]
 
     public nonisolated var stateUpdates: AsyncStream<AssistantState> {
         AsyncStream { continuation in
@@ -136,6 +138,7 @@ public actor DefaultAssistantSessionOrchestrator {
         projectWriter: (any ProjectIdentityWriting)? = nil,
         taskLedger: any AssistantTaskLedger = InMemoryAssistantTaskLedger(),
         readSelectionCommand: ReadSelectionCommand? = nil,
+        providerSetupInstaller: any ProviderSetupInstalling = DefaultProviderSetupInstaller(),
         companionState: CompanionStateCenter? = nil,
         stopSpeech: @escaping StopSpeechHandler
     ) {
@@ -150,6 +153,7 @@ public actor DefaultAssistantSessionOrchestrator {
         self.workspaceResolver = WorkspaceResolutionService(catalog: projectCatalog, writer: resolvedProjectWriter)
         self.taskLedger = taskLedger
         self.readSelectionCommand = readSelectionCommand
+        self.providerSetupInstaller = providerSetupInstaller
         self.companionState = companionState
         self.stopSpeech = stopSpeech
     }
@@ -308,6 +312,7 @@ public actor DefaultAssistantSessionOrchestrator {
         if let activeTurnID {
             recordTurnCancellation(activeTurnID)
         }
+        cancelPendingQuestions()
         await cancelActiveBrainAndSpeech()
         setState(.stopped)
         await emit(.interrupted, message: "Assistant cancelled.", correlationID: nil)
@@ -333,8 +338,11 @@ public actor DefaultAssistantSessionOrchestrator {
         appendStatus(text, status: status)
     }
 
-    public func requestAgentApprovalDecision(for prompt: AgentApprovalPrompt) async -> AgentApprovalDecision {
-        let messageID = appendAgentApprovalMessage(prompt)
+    public func requestAgentApprovalDecision(
+        for prompt: AgentApprovalPrompt,
+        allowsRememberedApproval: Bool = true
+    ) async -> AgentApprovalDecision {
+        let messageID = appendAgentApprovalMessage(prompt, allowsRememberedApproval: allowsRememberedApproval)
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 approvalContinuations[messageID] = continuation
@@ -381,6 +389,48 @@ public actor DefaultAssistantSessionOrchestrator {
         approvalContinuations.removeValue(forKey: messageID)?.resume(returning: decision)
     }
 
+    public func requestAgentQuestionAnswer(for prompt: AgentQuestionPrompt) async -> AgentQuestionResponse {
+        let messageID = appendAgentQuestionMessage(prompt)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                questionContinuations[messageID] = continuation
+            }
+        } onCancel: {
+            Task {
+                await self.submitAgentQuestionResponse(messageID, response: .cancelled)
+            }
+        }
+    }
+
+    public func submitAgentQuestionResponse(_ messageID: ChatMessageID, response: AgentQuestionResponse) async {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }),
+              var question = messages[index].questionRequest,
+              question.response == nil
+        else {
+            return
+        }
+
+        question.response = response
+        question.answeredAt = Date()
+        messages[index].questionRequest = question
+        messages[index].text = response.isCancelled ? "Cancelled." : "Answered."
+        messages[index].status = response.isCancelled ? .cancelled : .completed
+        publishMessages()
+
+        if let activeAssistantTaskID {
+            await recordTaskEvent(
+                activeAssistantTaskID,
+                kind: response.isCancelled ? .cancelled : .clarificationResolved,
+                status: response.isCancelled ? .cancelled : .running,
+                turnID: activeTurnID,
+                phase: "agentQuestion",
+                summary: response.isCancelled ? "Question cancelled." : "Question answered."
+            )
+        }
+
+        questionContinuations.removeValue(forKey: messageID)?.resume(returning: response)
+    }
+
     private func runAssistantTurn(
         input: String,
         request: AssistantSessionTurnRequest,
@@ -410,6 +460,57 @@ public actor DefaultAssistantSessionOrchestrator {
         setState(.thinking)
         await emit(.thinking, message: "Thinking.", correlationID: request.turnID.rawValue)
         do {
+            if try await handleLocalProviderSetupInstallIfNeeded(input: input, request: request, timing: &timing) {
+                emitDiagnostic(
+                    kind: .turnCompleted,
+                    turnID: request.turnID,
+                    phase: "finish",
+                    directiveType: timing.directiveType,
+                    outcome: AssistantTurnOutcome.completed.rawValue,
+                    metadata: diagnosticMetadata(for: request)
+                )
+                emitMetrics(timing.snapshot(outcome: .completed))
+                return
+            }
+
+            if let setupResponse = Self.localProviderSetupHelpResponse(for: input) {
+                timing.directiveStartedAt = Date()
+                timing.directiveFinishedAt = Date()
+                timing.directiveType = .respond
+                emitDiagnostic(
+                    kind: .directiveResolved,
+                    turnID: request.turnID,
+                    phase: "routing",
+                    directiveType: .respond,
+                    metadata: diagnosticMetadata(for: request)
+                )
+                let messageID = appendAssistantMessage(
+                    "",
+                    status: .streaming,
+                    request: request,
+                    directiveType: .respond,
+                    brainRole: .generalChat
+                )
+                completeMessage(
+                    messageID,
+                    text: setupResponse.bubbleText,
+                    detailsMarkdown: setupResponse.detailsMarkdown,
+                    status: .completed
+                )
+                remember(userText: input, assistantText: setupResponse.conversationText)
+                try await speak(setupResponse.bubbleText, request: request, timing: &timing)
+                emitDiagnostic(
+                    kind: .turnCompleted,
+                    turnID: request.turnID,
+                    phase: "finish",
+                    directiveType: .respond,
+                    outcome: AssistantTurnOutcome.completed.rawValue,
+                    metadata: diagnosticMetadata(for: request)
+                )
+                emitMetrics(timing.snapshot(outcome: .completed))
+                return
+            }
+
             let context = await contextProvider.currentContext()
             let brainProvider = try await resolver.brainProvider(id: request.selection(for: .companionRouter).providerID)
             activeBrainProvider = brainProvider
@@ -545,6 +646,298 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
+    private func handleLocalProviderSetupInstallIfNeeded(
+        input: String,
+        request: AssistantSessionTurnRequest,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> Bool {
+        guard Self.isClaudeCodeInstallRequest(input, recentMessages: conversationMessages) else {
+            return false
+        }
+
+        timing.directiveStartedAt = Date()
+        timing.directiveFinishedAt = Date()
+        timing.directiveType = .respond
+        emitDiagnostic(
+            kind: .directiveResolved,
+            turnID: request.turnID,
+            phase: "routing",
+            directiveType: .respond,
+            metadata: diagnosticMetadata(for: request)
+        )
+
+        let providerID = ProviderID(rawValue: "claude-code")
+        let status: AgentProviderSetupStatus
+        do {
+            _ = try await resolver.agentProvider(id: providerID)
+            let message = "Claude Code is already installed."
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .respond)
+            completeMessage(id, text: message, status: .completed)
+            remember(userText: input, assistantText: message)
+            try await speak(message, request: request, timing: &timing)
+            return true
+        } catch RocaError.agentProviderSetupRequired(let setupStatus) {
+            status = setupStatus
+        } catch {
+            let message = "I couldn't check Claude Code setup: \(error.localizedDescription)"
+            let id = appendAssistantMessage(message, status: .failed, request: request, directiveType: .respond)
+            completeMessage(id, text: message, status: .failed)
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
+            return true
+        }
+
+        guard status.providerID.rawValue == "claude-code",
+              status.state == .runtimeMissing,
+              let installCommand = status.installCommand?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !installCommand.isEmpty else {
+            let response = Self.agentProviderSetupResponse(status)
+            let id = appendAssistantMessage(response.bubbleText, status: .failed, request: request, directiveType: .respond)
+            completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .failed)
+            remember(userText: input, assistantText: response.conversationText)
+            try await speak(response.bubbleText, request: request, timing: &timing, force: request.inputMode == .voice)
+            return true
+        }
+
+        let approval = AgentApprovalPrompt(
+            requirement: AgentApprovalRequirement(
+                providerID: status.providerID,
+                role: .localPrivate,
+                mode: .act,
+                workspacePath: nil,
+                dataScopes: [.prompt],
+                actionScopes: [.runCommands, .useNetwork]
+            ),
+            title: "Install Claude Code",
+            detail: """
+            Roca will run this installer command, then add `~/.local/bin` to your shell PATH if needed:
+
+            \(installCommand)
+            """
+        )
+        let decision = await requestAgentApprovalDecision(for: approval, allowsRememberedApproval: false)
+        guard decision == .approve || decision == .approveForSession else {
+            let message = "No problem. I won't install Claude Code."
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .respond)
+            completeMessage(id, text: message, status: .completed)
+            remember(userText: input, assistantText: message)
+            try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
+            return true
+        }
+
+        let startedMessage = "Got it. I'll let you know once Claude Code is done installing."
+        let startedID = appendAssistantMessage(startedMessage, status: .completed, request: request, directiveType: .respond)
+        completeMessage(startedID, text: startedMessage, status: .completed)
+        do {
+            try await speak(
+                startedMessage,
+                request: request,
+                timing: &timing,
+                force: request.inputMode == .voice,
+                finishWhenDone: false
+            )
+        } catch {
+            if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
+                throw RocaError.cancelled
+            }
+        }
+
+        setState(.acting("Installing Claude Code"))
+        let actionID = appendActionMessage("Installing Claude Code...", status: .pending, request: request, directiveType: .respond)
+        timing.actionStartedAt = Date()
+        do {
+            try checkTurnStillActive(request.turnID)
+            let result = try await providerSetupInstaller.install(
+                ProviderSetupInstallRequest(
+                    providerID: status.providerID,
+                    displayName: status.displayName,
+                    installCommand: installCommand
+                )
+            )
+            timing.actionFinishedAt = Date()
+            try checkTurnStillActive(request.turnID)
+
+            if result.succeeded {
+                completeMessage(actionID, text: "Claude Code installer finished.", status: .completed)
+                let response = AssistantResponseContent(
+                    bubbleText: "Claude Code installer finished. Open a new Terminal, sign in if it asks, then recheck Claude Code in Settings.",
+                    detailsMarkdown: Self.installerOutputDetails(result)
+                )
+                let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .respond)
+                completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
+                remember(userText: input, assistantText: response.conversationText)
+                try await speak(response.bubbleText, request: request, timing: &timing, force: request.inputMode == .voice)
+                return true
+            }
+
+            let response = AssistantResponseContent(
+                bubbleText: "I couldn't install Claude Code. The installer exited with code \(result.exitCode).",
+                detailsMarkdown: Self.installerOutputDetails(result)
+            )
+            completeMessage(actionID, text: "Claude Code installer failed.", status: .failed)
+            let id = appendAssistantMessage(response.bubbleText, status: .failed, request: request, directiveType: .respond)
+            completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .failed)
+            remember(userText: input, assistantText: response.conversationText)
+            try await speak(response.bubbleText, request: request, timing: &timing, force: request.inputMode == .voice)
+            return true
+        } catch {
+            timing.actionFinishedAt = Date()
+            if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
+                completeMessage(actionID, text: "Claude Code install cancelled.", status: .cancelled)
+                throw RocaError.cancelled
+            }
+            let response = AssistantResponseContent(
+                bubbleText: "I couldn't install Claude Code: \(error.localizedDescription)",
+                detailsMarkdown: nil
+            )
+            completeMessage(actionID, text: "Claude Code installer failed.", status: .failed)
+            let id = appendAssistantMessage(response.bubbleText, status: .failed, request: request, directiveType: .respond)
+            completeMessage(id, text: response.bubbleText, status: .failed)
+            remember(userText: input, assistantText: response.conversationText)
+            try await speak(response.bubbleText, request: request, timing: &timing, force: request.inputMode == .voice)
+            return true
+        }
+    }
+
+    private nonisolated static func localProviderSetupHelpResponse(for input: String) -> AssistantResponseContent? {
+        let normalized = input.lowercased()
+        guard normalized.contains("claude") else {
+            return nil
+        }
+
+        let setupTopicPatterns = [
+            "api key",
+            "provider auth",
+            "auth",
+            "authenticate",
+            "credentials",
+            "login",
+            "sign in",
+            "claude code",
+            "claude cli"
+        ]
+        let helpIntentPatterns = [
+            "how",
+            "configure",
+            "configuration",
+            "where do",
+            "what do i",
+            "help me",
+            "set up",
+            "setup"
+        ]
+        let agentWorkPatterns = [
+            "ask claude to inspect",
+            "ask claude to review",
+            "ask claude to summarize",
+            "ask claude in"
+        ]
+        let isSetupTopic = setupTopicPatterns.contains { normalized.contains($0) }
+        let isHelpIntent = helpIntentPatterns.contains { normalized.contains($0) }
+        let isLikelyAgentWork = agentWorkPatterns.contains { normalized.contains($0) }
+        guard isSetupTopic, isHelpIntent, !isLikelyAgentWork else {
+            return nil
+        }
+
+        return AssistantResponseContent(
+            bubbleText: "Use Claude Code for Roca. Install the Claude CLI, sign in, then recheck Claude Code in Settings.",
+            detailsMarkdown: """
+            ## Claude Code setup
+
+            1. Install Claude Code:
+
+            ```sh
+            curl -fsSL https://claude.ai/install.sh | bash
+            ```
+
+            2. Sign in with Claude Code in Terminal.
+            3. Open `Settings > Assistant > Agent Providers` and click `Recheck Agent Providers`.
+
+            Roca uses your installed Claude Code CLI for Claude handoffs. Claude Code requires a Claude account with Claude Code access.
+
+            Reference: [Claude Code setup](https://code.claude.com/docs/en/setup)
+            """
+        )
+    }
+
+    private nonisolated static func isClaudeCodeInstallRequest(
+        _ input: String,
+        recentMessages: [BrainMessage]
+    ) -> Bool {
+        let normalized = input.lowercased()
+        let selfInstallPatterns = [
+            "install it myself",
+            "install claude myself",
+            "install it yourself",
+            "how do i install",
+            "how to install",
+            "show me how"
+        ]
+        if selfInstallPatterns.contains(where: { normalized.contains($0) }) {
+            return false
+        }
+
+        let explicitInstallPatterns = [
+            "can you install",
+            "could you install",
+            "please install",
+            "install claude",
+            "install the claude",
+            "go ahead and install",
+            "set it up for me",
+            "install it for me",
+            "do the install"
+        ]
+        let asksRocaToInstall = explicitInstallPatterns.contains { normalized.contains($0) }
+            || normalized.trimmingCharacters(in: .whitespacesAndNewlines) == "install it"
+        guard asksRocaToInstall else {
+            return false
+        }
+
+        if normalized.contains("claude") {
+            return true
+        }
+        return recentMessages.suffix(6).contains { message in
+            let content = message.content.lowercased()
+            return content.contains("claude code cli is not installed")
+                || content.contains("claude code setup")
+                || content.contains("https://claude.ai/install.sh")
+        }
+    }
+
+    private nonisolated static func installerOutputDetails(_ result: ProviderSetupInstallResult) -> String? {
+        let trimmedOutput = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = result.postInstallNotes
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !trimmedOutput.isEmpty || !notes.isEmpty else {
+            return nil
+        }
+
+        var sections: [String] = []
+        if !notes.isEmpty {
+            sections.append(
+                """
+                ## Setup Notes
+
+                \(notes.map { "- \($0)" }.joined(separator: "\n"))
+                """
+            )
+        }
+        if !trimmedOutput.isEmpty {
+            sections.append(
+                """
+                ## Installer Output
+
+                ```text
+                \(trimmedOutput)
+                ```
+                """
+            )
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
     private func handlePendingProjectClarificationIfNeeded(
         input: String,
         request: AssistantSessionTurnRequest,
@@ -576,24 +969,150 @@ public actor DefaultAssistantSessionOrchestrator {
             return true
         }
 
-        switch Self.projectClarificationResolution(input: input, candidates: pending.candidates) {
+        var currentPending = pending
+        let correctedQuery = Self.correctedProjectQuery(from: input, fallback: currentPending.query)
+        if correctedQuery != currentPending.query {
+            currentPending.query = correctedQuery
+            currentPending.directive.projectName = correctedQuery
+            pendingProjectClarification = currentPending
+        }
+
+        if Self.looksLikeProjectFolderHint(input) {
+            switch try await workspaceResolver.resolveFromLocalFolders(query: correctedQuery, hint: input) {
+            case .resolved(let resolved):
+                pendingProjectClarification = nil
+                var directive = currentPending.directive
+                directive.projectName = resolved.project.displayName
+                timing.directiveType = .runAgent
+                timing.directiveFinishedAt = Date()
+                await recordTaskEvent(
+                    currentPending.taskID,
+                    kind: .clarificationResolved,
+                    status: .resolvingProject,
+                    turnID: request.turnID,
+                    phase: "projectFolderHint",
+                    summary: "Found \(resolved.project.displayName) from the folder hint.",
+                    metadata: [
+                        "projectQuery": correctedQuery,
+                        "projectID": resolved.project.id.rawValue,
+                        "projectPath": resolved.project.localPath
+                    ]
+                ) { task in
+                    task.resolvedProject = resolved.project
+                }
+                emitDiagnostic(
+                    kind: .agentProjectLookupCompleted,
+                    turnID: request.turnID,
+                    phase: "projectFolderHint",
+                    providerID: currentPending.providerID,
+                    directiveType: .runAgent,
+                    outcome: "resolved",
+                    metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(resolved.candidateCount ?? 0)])
+                )
+                try await handleAgentDirective(
+                    directive,
+                    input: currentPending.originalUserInput,
+                    request: request,
+                    context: context,
+                    brainProvider: brainProvider,
+                    timing: &timing,
+                    resolvedProjectOverride: resolved.project,
+                    existingTaskID: currentPending.taskID
+                )
+                return true
+            case .ambiguous(_, let candidates, _):
+                let response = Self.projectClarificationResponse(for: candidates, query: correctedQuery)
+                let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+                completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
+                currentPending.candidates = candidates
+                currentPending.questionMessageID = id
+                pendingProjectClarification = currentPending
+                timing.directiveType = .runAgent
+                timing.directiveFinishedAt = Date()
+                await recordTaskEvent(
+                    currentPending.taskID,
+                    kind: .clarificationRequested,
+                    status: .waitingForClarification,
+                    turnID: request.turnID,
+                    phase: "projectFolderHint",
+                    summary: response.conversationText,
+                    metadata: ["candidateCount": String(candidates.count)]
+                )
+                emitDiagnostic(
+                    kind: .agentProjectLookupCompleted,
+                    turnID: request.turnID,
+                    phase: "projectFolderHint",
+                    providerID: currentPending.providerID,
+                    directiveType: .runAgent,
+                    outcome: "ambiguous",
+                    metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
+                )
+                rememberAssistantObservation(response.bubbleText)
+                try await speak(response.bubbleText, request: request, timing: &timing)
+                return true
+            case .missing:
+                let message = "I looked there, but couldn't find a project matching \(correctedQuery). Please give me a more specific folder or project name."
+                let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+                completeMessage(id, text: message, status: .completed)
+                pendingProjectClarification = currentPending
+                timing.directiveType = .runAgent
+                timing.directiveFinishedAt = Date()
+                await recordTaskEvent(
+                    currentPending.taskID,
+                    kind: .clarificationRequested,
+                    status: .waitingForClarification,
+                    turnID: request.turnID,
+                    phase: "projectFolderHint",
+                    summary: message
+                )
+                rememberAssistantObservation(message)
+                try await speak(message, request: request, timing: &timing)
+                return true
+            case .needsMoreSpecificQuery:
+                break
+            }
+        }
+
+        if currentPending.candidates.isEmpty {
+            let message = "Got it, \(correctedQuery). Where should I look for that project folder?"
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: message, status: .completed)
+            currentPending.questionMessageID = id
+            pendingProjectClarification = currentPending
+            timing.directiveType = .runAgent
+            timing.directiveFinishedAt = Date()
+            await recordTaskEvent(
+                currentPending.taskID,
+                kind: .clarificationRequested,
+                status: .waitingForClarification,
+                turnID: request.turnID,
+                phase: "projectClarification",
+                summary: message
+            )
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing)
+            return true
+        }
+
+        switch Self.projectClarificationResolution(input: input, candidates: currentPending.candidates) {
         case .resolved(let project):
+            await workspaceResolver.remember(project)
             pendingProjectClarification = nil
-            var directive = pending.directive
+            var directive = currentPending.directive
             directive.projectName = project.displayName
             timing.directiveType = .runAgent
             timing.directiveFinishedAt = Date()
             await recordTaskEvent(
-                pending.taskID,
+                currentPending.taskID,
                 kind: .clarificationResolved,
                 status: .resolvingProject,
                 turnID: request.turnID,
                 phase: "projectClarification",
                 summary: "User chose \(project.displayName).",
                 metadata: [
-                    "clarificationTurnID": pending.createdTurnID.rawValue,
-                    "questionMessageID": pending.questionMessageID.rawValue,
-                    "projectQuery": pending.query,
+                    "clarificationTurnID": currentPending.createdTurnID.rawValue,
+                    "questionMessageID": currentPending.questionMessageID.rawValue,
+                    "projectQuery": currentPending.query,
                     "projectID": project.id.rawValue
                 ]
             ) { task in
@@ -603,15 +1122,15 @@ public actor DefaultAssistantSessionOrchestrator {
                 kind: .directiveResolved,
                 turnID: request.turnID,
                 phase: "projectClarification",
-                providerID: pending.providerID,
+                providerID: currentPending.providerID,
                 directiveType: .runAgent,
                 outcome: "resumed",
                 metadata: diagnosticMetadata(
                     for: request,
                     extra: [
-                        "clarificationTurnID": pending.createdTurnID.rawValue,
-                        "questionMessageID": pending.questionMessageID.rawValue,
-                        "projectQuery": pending.query,
+                        "clarificationTurnID": currentPending.createdTurnID.rawValue,
+                        "questionMessageID": currentPending.questionMessageID.rawValue,
+                        "projectQuery": currentPending.query,
                         "projectID": project.id.rawValue,
                         "projectName": project.displayName
                     ]
@@ -619,63 +1138,66 @@ public actor DefaultAssistantSessionOrchestrator {
             )
             try await handleAgentDirective(
                 directive,
-                input: pending.originalUserInput,
+                input: currentPending.originalUserInput,
                 request: request,
                 context: context,
                 brainProvider: brainProvider,
                 timing: &timing,
                 resolvedProjectOverride: project,
-                existingTaskID: pending.taskID
+                existingTaskID: currentPending.taskID
             )
             return true
         case .ambiguous(_, let candidates):
             pendingProjectClarification?.candidates = candidates
             timing.directiveType = .runAgent
             timing.directiveFinishedAt = Date()
-            let message = Self.projectClarificationQuestion(for: candidates)
+            let response = Self.projectClarificationResponse(for: candidates, query: currentPending.query)
             await recordTaskEvent(
-                pending.taskID,
+                currentPending.taskID,
                 kind: .clarificationRequested,
                 status: .waitingForClarification,
                 turnID: request.turnID,
                 phase: "projectClarification",
-                summary: message,
+                summary: response.conversationText,
                 metadata: ["candidateCount": String(candidates.count)]
             )
-            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
-            completeMessage(id, text: message, status: .completed)
-            rememberAssistantObservation(message)
-            try await speak(message, request: request, timing: &timing)
+            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
+            rememberAssistantObservation(response.bubbleText)
+            try await speak(response.bubbleText, request: request, timing: &timing)
             return true
         case .missing:
-            guard Self.looksLikeProjectClarificationAnswer(input, candidates: pending.candidates) else {
+            guard Self.looksLikeProjectClarificationAnswer(input, candidates: currentPending.candidates) else {
                 await recordTaskEvent(
-                    pending.taskID,
+                    currentPending.taskID,
                     kind: .cancelled,
                     status: .cancelled,
                     turnID: request.turnID,
                     phase: "projectClarification",
-                    summary: "User moved on before clarifying \(pending.query)."
+                    summary: "User moved on before clarifying \(currentPending.query)."
                 )
                 pendingProjectClarification = nil
                 return false
             }
             timing.directiveType = .runAgent
             timing.directiveFinishedAt = Date()
-            let names = pending.candidates.map(\.displayName).joined(separator: ", ")
-            let message = "I couldn't match that to one of the project options. Which project do you mean: \(names)?"
+            let response = Self.projectClarificationResponse(
+                for: currentPending.candidates,
+                query: currentPending.query,
+                retryingAfterMiss: true
+            )
             await recordTaskEvent(
-                pending.taskID,
+                currentPending.taskID,
                 kind: .clarificationRequested,
                 status: .waitingForClarification,
                 turnID: request.turnID,
                 phase: "projectClarification",
-                summary: message
+                summary: response.conversationText
             )
-            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
-            completeMessage(id, text: message, status: .completed)
-            rememberAssistantObservation(message)
-            try await speak(message, request: request, timing: &timing)
+            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
+            rememberAssistantObservation(response.bubbleText)
+            try await speak(response.bubbleText, request: request, timing: &timing)
             return true
         }
     }
@@ -860,6 +1382,23 @@ public actor DefaultAssistantSessionOrchestrator {
                 phase: "providerResolution",
                 summary: "Using \(providerName)."
             )
+        } catch RocaError.agentProviderSetupRequired(let status) {
+            if isTurnCancelled(request.turnID) {
+                throw RocaError.cancelled
+            }
+            let response = Self.agentProviderSetupResponse(status)
+            await recordTaskFailure(
+                taskID,
+                turnID: request.turnID,
+                phase: "providerResolution",
+                message: response.conversationText,
+                error: RocaError.agentProviderSetupRequired(status)
+            )
+            let id = appendAssistantMessage(response.bubbleText, status: .failed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .failed)
+            rememberAssistantObservation(response.conversationText)
+            try await speak(response.bubbleText, request: request, timing: &timing, force: request.inputMode == .voice)
+            return
         } catch {
             if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
                 await recordTaskEvent(
@@ -997,6 +1536,16 @@ public actor DefaultAssistantSessionOrchestrator {
                         summary: "\(providerName) requested approval."
                     )
                     completeMessage(actionID, text: "Waiting for approval.", status: .streaming)
+                case .questionRequired:
+                    await recordTaskEvent(
+                        taskID,
+                        kind: .clarificationRequested,
+                        status: .waitingForClarification,
+                        turnID: request.turnID,
+                        phase: "agentQuestion",
+                        summary: "\(providerName) asked a question."
+                    )
+                    completeMessage(actionID, text: "Waiting for input.", status: .streaming)
                 case .final(let response):
                     finalText = response.text
                     didFinish = true
@@ -1195,6 +1744,28 @@ public actor DefaultAssistantSessionOrchestrator {
                 metadata: diagnosticMetadata(for: request, error: RocaError.approvalRequired(detail))
             )
             try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
+        } catch RocaError.agentProviderSetupRequired(let status) {
+            timing.actionFinishedAt = Date()
+            let response = Self.agentProviderSetupResponse(status)
+            await recordTaskFailure(
+                taskID,
+                turnID: request.turnID,
+                phase: "agentSetup",
+                message: response.conversationText,
+                error: RocaError.agentProviderSetupRequired(status)
+            )
+            completeMessage(actionID, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .failed)
+            rememberAssistantObservation(response.conversationText)
+            emitDiagnostic(
+                kind: .agentRunFailed,
+                turnID: request.turnID,
+                phase: "agentSetup",
+                providerID: providerID,
+                directiveType: .runAgent,
+                outcome: AssistantTurnOutcome.failed.rawValue,
+                metadata: diagnosticMetadata(for: request, error: RocaError.agentProviderSetupRequired(status))
+            )
+            try await speak(response.bubbleText, request: request, timing: &timing, force: request.inputMode == .voice)
         } catch {
             timing.actionFinishedAt = Date()
             if Self.isCancellation(error) {
@@ -1282,18 +1853,18 @@ public actor DefaultAssistantSessionOrchestrator {
             }
             return (project, true)
         case .ambiguous(_, let candidates):
-            let message = Self.projectClarificationQuestion(for: candidates)
+            let response = Self.projectClarificationResponse(for: candidates, query: projectName)
             await recordTaskEvent(
                 taskID,
                 kind: .clarificationRequested,
                 status: .waitingForClarification,
                 turnID: request.turnID,
                 phase: "projectLookup",
-                summary: message,
+                summary: response.conversationText,
                 metadata: ["candidateCount": String(candidates.count)]
             )
-            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
-            completeMessage(id, text: message, status: .completed)
+            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+            completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
             storePendingProjectClarification(
                 taskID: taskID,
                 directive: directive,
@@ -1303,8 +1874,8 @@ public actor DefaultAssistantSessionOrchestrator {
                 questionMessageID: id,
                 request: request
             )
-            rememberAssistantObservation(message)
-            try await speak(message, request: request, timing: &timing)
+            rememberAssistantObservation(response.bubbleText)
+            try await speak(response.bubbleText, request: request, timing: &timing)
             return (nil, false)
         case .needsProviderDiscovery(let broadLocalMatch):
             guard let discoverer else {
@@ -1319,6 +1890,8 @@ public actor DefaultAssistantSessionOrchestrator {
                     )
                 }
                 return try await askForMissingProjectFolder(
+                    directive: directive,
+                    originalUserInput: userInput,
                     projectName: projectName,
                     providerName: providerName,
                     request: request,
@@ -1407,18 +1980,18 @@ public actor DefaultAssistantSessionOrchestrator {
                 return (project, true)
             case .ambiguous(_, let candidates, _):
                 completeMessage(lookupID, text: "Found multiple project matches.", status: .completed)
-                let message = Self.projectClarificationQuestion(for: candidates)
+                let response = Self.projectClarificationResponse(for: candidates, query: projectName)
                 await recordTaskEvent(
                     taskID,
                     kind: .clarificationRequested,
                     status: .waitingForClarification,
                     turnID: request.turnID,
                     phase: "projectLookup",
-                    summary: message,
+                    summary: response.conversationText,
                     metadata: ["candidateCount": String(candidates.count)]
                 )
-                let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
-                completeMessage(id, text: message, status: .completed)
+                let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+                completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
                 storePendingProjectClarification(
                     taskID: taskID,
                     directive: directive,
@@ -1428,7 +2001,7 @@ public actor DefaultAssistantSessionOrchestrator {
                     questionMessageID: id,
                     request: request
                 )
-                rememberAssistantObservation(message)
+                rememberAssistantObservation(response.bubbleText)
                 emitDiagnostic(
                     kind: .agentProjectLookupCompleted,
                     turnID: request.turnID,
@@ -1438,7 +2011,7 @@ public actor DefaultAssistantSessionOrchestrator {
                     outcome: "ambiguous",
                     metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
                 )
-                try await speak(message, request: request, timing: &timing)
+                try await speak(response.bubbleText, request: request, timing: &timing)
                 return (nil, false)
             case .missing(_, _, let candidateCount):
                 await recordTaskFailure(
@@ -1468,6 +2041,8 @@ public actor DefaultAssistantSessionOrchestrator {
                     )
                 }
                 return try await askForMissingProjectFolder(
+                    directive: directive,
+                    originalUserInput: userInput,
                     projectName: projectName,
                     providerName: providerName,
                     request: request,
@@ -1537,6 +2112,8 @@ public actor DefaultAssistantSessionOrchestrator {
     }
 
     private func askForMissingProjectFolder(
+        directive: AgentDirectiveRequest,
+        originalUserInput: String,
         projectName: String,
         providerName: String,
         request: AssistantSessionTurnRequest,
@@ -1552,6 +2129,15 @@ public actor DefaultAssistantSessionOrchestrator {
         )
         let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
         completeMessage(id, text: message, status: .completed)
+        storePendingProjectClarification(
+            taskID: taskID,
+            directive: directive,
+            originalUserInput: originalUserInput,
+            query: projectName,
+            candidates: [],
+            questionMessageID: id,
+            request: request
+        )
         rememberAssistantObservation(message)
         try await speak(message, request: request, timing: &timing)
         return (nil, false)
@@ -1617,11 +2203,72 @@ public actor DefaultAssistantSessionOrchestrator {
         return "Which project do you mean: \(names)?"
     }
 
+    private static func projectClarificationResponse(
+        for candidates: [ProjectIdentity],
+        query: String,
+        retryingAfterMiss: Bool = false
+    ) -> AssistantResponseContent {
+        guard candidates.count > 3 else {
+            let question = projectClarificationQuestion(for: candidates)
+            return AssistantResponseContent(
+                bubbleText: retryingAfterMiss
+                    ? "I couldn't match that to one of the project options. \(question)"
+                    : question,
+                detailsMarkdown: nil
+            )
+        }
+
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = trimmedQuery.isEmpty ? "project" : trimmedQuery
+        let bubble = retryingAfterMiss
+            ? "I couldn't match that. I see \(candidates.count) \(label) projects. Which one are you talking about?"
+            : "I see \(candidates.count) \(label) projects. Which one are you talking about?"
+
+        return AssistantResponseContent(
+            bubbleText: bubble,
+            detailsMarkdown: projectClarificationDetails(for: candidates)
+        )
+    }
+
+    private static func projectClarificationDetails(for candidates: [ProjectIdentity]) -> String {
+        let displayedCandidates = candidates.prefix(12)
+        var lines = ["## Matching Projects"]
+        if candidates.count > displayedCandidates.count {
+            lines.append("")
+            lines.append("Showing \(displayedCandidates.count) of \(candidates.count). Say a more specific project name to narrow it down.")
+        }
+        lines.append("")
+        lines.append(contentsOf: displayedCandidates.map { "- \($0.displayName)" })
+        return lines.joined(separator: "\n")
+    }
+
     private static func projectClarificationResolution(
         input: String,
         candidates: [ProjectIdentity]
     ) -> ProjectResolution {
         ProjectIdentityResolver(projects: candidates).resolve(projectClarificationQuery(from: input))
+    }
+
+    private static func correctedProjectQuery(from input: String, fallback: String) -> String {
+        explicitProjectName(from: input) ?? fallback
+    }
+
+    private static func looksLikeProjectFolderHint(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        let tokens = Set(normalized.split(separator: " ").map(String.init))
+        if input.contains("/") || input.contains("~") {
+            return true
+        }
+        return !tokens.isDisjoint(with: [
+            "desktop",
+            "directory",
+            "documents",
+            "downloads",
+            "folder",
+            "path",
+            "somewhere",
+            "workspace"
+        ])
     }
 
     private static func projectClarificationQuery(from input: String) -> String {
@@ -1867,6 +2514,26 @@ public actor DefaultAssistantSessionOrchestrator {
         await speechOrchestrator.stopSpeaking()
     }
 
+    private func cancelPendingQuestions() {
+        let pending = questionContinuations
+        questionContinuations.removeAll()
+        for (messageID, continuation) in pending {
+            if let index = messages.firstIndex(where: { $0.id == messageID }),
+               var question = messages[index].questionRequest,
+               question.response == nil {
+                question.response = .cancelled
+                question.answeredAt = Date()
+                messages[index].questionRequest = question
+                messages[index].text = "Cancelled."
+                messages[index].status = .cancelled
+            }
+            continuation.resume(returning: .cancelled)
+        }
+        if !pending.isEmpty {
+            publishMessages()
+        }
+    }
+
     private func remember(userText: String, assistantText: String) {
         conversationMessages.append(BrainMessage(role: .user, content: userText))
         conversationMessages.append(BrainMessage(role: .assistant, content: assistantText))
@@ -2022,7 +2689,10 @@ public actor DefaultAssistantSessionOrchestrator {
     }
 
     @discardableResult
-    private func appendAgentApprovalMessage(_ prompt: AgentApprovalPrompt) -> ChatMessageID {
+    private func appendAgentApprovalMessage(
+        _ prompt: AgentApprovalPrompt,
+        allowsRememberedApproval: Bool = true
+    ) -> ChatMessageID {
         let messageID = ChatMessageID.make()
         return appendMessage(
             ChatMessage(
@@ -2035,7 +2705,28 @@ public actor DefaultAssistantSessionOrchestrator {
                     id: messageID,
                     title: prompt.title,
                     detail: prompt.detail,
-                    requirement: prompt.requirement
+                    requirement: prompt.requirement,
+                    allowsRememberedApproval: allowsRememberedApproval ? nil : false
+                ),
+                status: .pending
+            )
+        )
+    }
+
+    @discardableResult
+    private func appendAgentQuestionMessage(_ prompt: AgentQuestionPrompt) -> ChatMessageID {
+        let messageID = ChatMessageID.make()
+        return appendMessage(
+            ChatMessage(
+                id: messageID,
+                turnID: activeTurnID,
+                role: .action,
+                source: .localAction,
+                text: prompt.title,
+                questionRequest: ChatQuestionRequest(
+                    id: messageID,
+                    title: prompt.title,
+                    prompt: prompt
                 ),
                 status: .pending
             )
@@ -2272,7 +2963,33 @@ public actor DefaultAssistantSessionOrchestrator {
         if case RocaError.approvalDenied = error {
             return "approvalDenied"
         }
+        if case RocaError.agentProviderSetupRequired = error {
+            return "agentProviderSetupRequired"
+        }
         return String(describing: type(of: error))
+    }
+
+    private nonisolated static func agentProviderSetupResponse(_ status: AgentProviderSetupStatus) -> AssistantResponseContent {
+        let summary = status.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if status.providerID.rawValue == "claude-code",
+           status.state == .runtimeMissing,
+           let installCommand = status.installCommand?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !installCommand.isEmpty {
+            return AssistantResponseContent(
+                bubbleText: "\(summary) I can install it for you, or you can install it yourself using the command below.",
+                detailsMarkdown: """
+                ```sh
+                \(installCommand)
+                ```
+                """
+            )
+        }
+
+        let message = [summary, status.guidance]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return AssistantResponseContent(bubbleText: message, detailsMarkdown: nil)
     }
 
     private func emit(_ activity: RocaActivity, message: String, correlationID: String?) async {

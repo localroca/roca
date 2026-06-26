@@ -3,7 +3,7 @@ import Testing
 
 @Test
 func assistantPromptCatalogExposesStablePromptVersions() {
-    #expect(AssistantPromptCatalog.directivePromptVersion == "assistant-router-2026-06-15-v1")
+    #expect(AssistantPromptCatalog.directivePromptVersion == "assistant-router-2026-06-26-v1")
     #expect(AssistantPromptCatalog.responsePromptVersion == "companion-response-2026-06-14-v1")
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"readSelection"}"#))
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"runAgent""#))
@@ -30,6 +30,27 @@ func assistantPromptCatalogParsesStructuredAssistantResponse() {
     #expect(response.bubbleText == "Short.")
     #expect(response.detailsMarkdown == "## Details\n- One")
     #expect(response.conversationText == "Short.\n\n## Details\n- One")
+}
+
+@Test
+func assistantPromptCatalogNormalizesDoubleEscapedMarkdownLineBreaks() {
+    let response = AssistantPromptCatalog.parseAssistantResponse(
+        ###"{"bubbleText":"Done.","detailsMarkdown":"- File: `README.md`\\n- Location: `/tmp/project`\\n- Line count: 313"}"###
+    )
+
+    #expect(response.bubbleText == "Done.")
+    #expect(response.detailsMarkdown == "- File: `README.md`\n- Location: `/tmp/project`\n- Line count: 313")
+    #expect(response.detailsMarkdown?.contains(#"\n"#) == false)
+}
+
+@Test
+func assistantPromptCatalogPreservesEscapedNewlinesInsideCodeDetails() {
+    let response = AssistantPromptCatalog.parseAssistantResponse(
+        ###"{"bubbleText":"Snippet.","detailsMarkdown":"Use `print(\"a\\n\")` to include a newline."}"###
+    )
+
+    #expect(response.bubbleText == "Snippet.")
+    #expect(response.detailsMarkdown == #"Use `print("a\n")` to include a newline."#)
 }
 
 @Test

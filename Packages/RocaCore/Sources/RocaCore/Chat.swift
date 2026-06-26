@@ -82,6 +82,7 @@ public struct ChatApprovalRequest: Codable, Equatable, Sendable {
     public var title: String
     public var detail: String
     public var requirement: AgentApprovalRequirement
+    public var allowsRememberedApproval: Bool?
     public var decision: AgentApprovalDecision?
     public var decidedAt: Date?
 
@@ -90,6 +91,7 @@ public struct ChatApprovalRequest: Codable, Equatable, Sendable {
         title: String,
         detail: String,
         requirement: AgentApprovalRequirement,
+        allowsRememberedApproval: Bool? = nil,
         decision: AgentApprovalDecision? = nil,
         decidedAt: Date? = nil
     ) {
@@ -97,8 +99,31 @@ public struct ChatApprovalRequest: Codable, Equatable, Sendable {
         self.title = title
         self.detail = detail
         self.requirement = requirement
+        self.allowsRememberedApproval = allowsRememberedApproval
         self.decision = decision
         self.decidedAt = decidedAt
+    }
+}
+
+public struct ChatQuestionRequest: Codable, Equatable, Sendable {
+    public var id: ChatMessageID
+    public var title: String
+    public var prompt: AgentQuestionPrompt
+    public var response: AgentQuestionResponse?
+    public var answeredAt: Date?
+
+    public init(
+        id: ChatMessageID,
+        title: String,
+        prompt: AgentQuestionPrompt,
+        response: AgentQuestionResponse? = nil,
+        answeredAt: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.prompt = prompt
+        self.response = response
+        self.answeredAt = answeredAt
     }
 }
 
@@ -151,6 +176,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     public var text: String
     public var detailsMarkdown: String?
     public var approvalRequest: ChatApprovalRequest?
+    public var questionRequest: ChatQuestionRequest?
     public var status: ChatMessageStatus
     public var metadata: ChatMessageMetadata?
     public var createdAt: Date
@@ -163,6 +189,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         text: String,
         detailsMarkdown: String? = nil,
         approvalRequest: ChatApprovalRequest? = nil,
+        questionRequest: ChatQuestionRequest? = nil,
         status: ChatMessageStatus,
         metadata: ChatMessageMetadata? = nil,
         createdAt: Date = Date()
@@ -174,6 +201,7 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.text = text
         self.detailsMarkdown = detailsMarkdown
         self.approvalRequest = approvalRequest
+        self.questionRequest = questionRequest
         self.status = status
         self.metadata = metadata
         self.createdAt = createdAt

@@ -42,6 +42,7 @@ public struct SessionResolver: ProviderResolving {
         guard let agent, agent.id == id else {
             throw RocaError.providerUnavailable(id ?? ProviderID(rawValue: "agent"))
         }
+        try await agent.prepare()
         return agent
     }
 }
@@ -245,8 +246,8 @@ public actor NoisySessionAgentProvider: AgentProvider, AgentProjectDiscovering {
 }
 
 public actor HangingSessionAgentProvider: AgentProvider {
-    public let id = ProviderID(rawValue: "codex-agent")
-    public let displayName = "Codex"
+    public let id: ProviderID
+    public let displayName: String
     public let capabilities = AgentCapabilities(
         supportsStreaming: true,
         supportsToolApprovals: true,
@@ -259,7 +260,10 @@ public actor HangingSessionAgentProvider: AgentProvider {
     public private(set) var cancelledRunIDs: [AgentRunID] = []
     private var continuations: [AgentRunID: AsyncThrowingStream<AgentEvent, Error>.Continuation] = [:]
 
-    public init() {}
+    public init(id: ProviderID = ProviderID(rawValue: "codex-agent"), displayName: String = "Codex") {
+        self.id = id
+        self.displayName = displayName
+    }
 
     public func prepare() async throws {}
 
@@ -279,6 +283,49 @@ public actor HangingSessionAgentProvider: AgentProvider {
         continuation.yield(.cancelled(runID: runID))
         continuation.finish(throwing: RocaError.cancelled)
     }
+}
+
+public actor SetupRequiredSessionAgentProvider: AgentProvider {
+    public let id: ProviderID
+    public let displayName: String
+    public let capabilities = AgentCapabilities(
+        supportsStreaming: true,
+        supportsToolApprovals: true,
+        supportsLocalExecution: true,
+        locality: .remote,
+        supportedModes: AgentMode.allCases
+    )
+
+    private let status: AgentProviderSetupStatus
+
+    public init(
+        id: ProviderID = ProviderID(rawValue: "claude-code"),
+        displayName: String = "Claude",
+        state: AgentProviderSetupState = .runtimeMissing,
+        summary: String = "Claude Code CLI is not installed.",
+        guidance: String = "Install Claude Code, sign in with a Claude Code-capable account, then recheck Claude Code."
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.status = AgentProviderSetupStatus(
+            providerID: id,
+            displayName: displayName,
+            state: state,
+            summary: summary,
+            guidance: guidance,
+            installCommand: state == .ready ? nil : "curl -fsSL https://claude.ai/install.sh | bash"
+        )
+    }
+
+    public func prepare() async throws {
+        throw RocaError.agentProviderSetupRequired(status)
+    }
+
+    public func start(_ request: AgentRunRequest) async throws -> AsyncThrowingStream<AgentEvent, Error> {
+        throw RocaError.agentProviderSetupRequired(status)
+    }
+
+    public func cancel(_ runID: AgentRunID) async {}
 }
 
 public actor RecordingProjectWriter: ProjectIdentityWriting {

@@ -9,6 +9,7 @@ public enum BuiltInProviderIDs {
     public static let whisperKitSTT = ProviderID(rawValue: "whisperkit")
     public static let ollamaBrain = ProviderID(rawValue: "ollama")
     public static let codexAgent = ProviderID(rawValue: "codex-agent")
+    public static let claudeCode = ProviderID(rawValue: "claude-code")
 }
 
 public enum BuiltInProviderDescriptors {
@@ -73,6 +74,14 @@ public enum BuiltInProviderDescriptors {
                 isEnabled: true,
                 isBuiltIn: true,
                 locality: .remote
+            ),
+            ProviderDescriptor(
+                id: BuiltInProviderIDs.claudeCode,
+                kind: .agent,
+                displayName: "Claude Code",
+                isEnabled: true,
+                isBuiltIn: true,
+                locality: .remote
             )
         ]
     }
@@ -92,6 +101,19 @@ public enum BuiltInCapabilityDescriptors {
                     supportedModes: AgentMode.allCases
                 ),
                 supportsProjectDiscovery: true
+            ),
+            CapabilityDescriptor.agent(
+                providerID: BuiltInProviderIDs.claudeCode,
+                displayName: "Claude Code",
+                capabilities: AgentCapabilities(
+                    supportsStreaming: false,
+                    supportsToolApprovals: false,
+                    supportsLocalExecution: true,
+                    locality: .remote,
+                    supportedModes: AgentMode.allCases
+                ),
+                supportsProjectDiscovery: false,
+                approvalBehavior: .policyDriven
             )
         ]
     }

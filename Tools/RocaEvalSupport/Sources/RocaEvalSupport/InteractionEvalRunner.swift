@@ -82,6 +82,8 @@ public struct InteractionEvalRunner: Sendable {
 
             if let approvalPrompt = turn.approvalPrompt {
                 try await runApprovalTurn(approvalPrompt, orchestrator: orchestrator)
+            } else if let questionPrompt = turn.questionPrompt {
+                try await runQuestionTurn(questionPrompt, orchestrator: orchestrator)
             } else if turn.cancelAfterAgentStarts {
                 try await runCancellableTurn(turn, orchestrator: orchestrator, agentBundle: agentBundle, configuration: configuration)
             } else {
@@ -192,8 +194,11 @@ public struct InteractionEvalRunner: Sendable {
             )
             return InteractionAgentBundle(provider: provider, hanging: nil)
         case .hanging:
-            let provider = HangingSessionAgentProvider()
+            let provider = HangingSessionAgentProvider(id: providerID, displayName: fixture.displayName)
             return InteractionAgentBundle(provider: provider, hanging: provider)
+        case .setupUnavailable:
+            let provider = SetupRequiredSessionAgentProvider(id: providerID, displayName: fixture.displayName)
+            return InteractionAgentBundle(provider: provider, hanging: nil)
         }
     }
 
@@ -226,6 +231,24 @@ public struct InteractionEvalRunner: Sendable {
             await orchestrator.submitAgentApprovalDecision(message.id, decision: decision)
         }
         _ = try await value(from: decisionTask)
+    }
+
+    private func runQuestionTurn(
+        _ fixture: InteractionQuestionPromptFixture,
+        orchestrator: DefaultAssistantSessionOrchestrator
+    ) async throws {
+        let prompt = fixture.prompt
+        let responseTask = Task {
+            await orchestrator.requestAgentQuestionAnswer(for: prompt)
+        }
+        try await waitUntil {
+            await orchestrator.messageSnapshot.contains { $0.questionRequest?.prompt == prompt }
+        }
+
+        if let message = await orchestrator.messageSnapshot.first(where: { $0.questionRequest?.prompt == prompt }) {
+            await orchestrator.submitAgentQuestionResponse(message.id, response: fixture.response ?? .cancelled)
+        }
+        _ = try await value(from: responseTask)
     }
 
     private func runCancellableTurn(
@@ -296,7 +319,18 @@ public struct InteractionEvalRunner: Sendable {
         }
 
         let searchableMessageText = messages
-            .map { [$0.text, $0.detailsMarkdown, $0.approvalRequest?.title, $0.approvalRequest?.detail].compactMap { $0 }.joined(separator: "\n") }
+            .map {
+                [
+                    $0.text,
+                    $0.detailsMarkdown,
+                    $0.approvalRequest?.title,
+                    $0.approvalRequest?.detail,
+                    $0.questionRequest?.title,
+                    $0.questionRequest?.prompt.questions.map(\.question).joined(separator: "\n")
+                ]
+                    .compactMap { $0 }
+                    .joined(separator: "\n")
+            }
             .joined(separator: "\n")
         for forbidden in expectations.forbiddenMessageTextContains where contains(searchableMessageText, forbidden) {
             failures.append("Forbidden message text appeared: \(forbidden)")
@@ -368,6 +402,10 @@ public struct InteractionEvalRunner: Sendable {
         }
         if let approvalDecision = expectation.approvalDecision,
            message.approvalRequest?.decision != approvalDecision {
+            return false
+        }
+        if let questionTitleContains = expectation.questionTitleContains,
+           !contains(message.questionRequest?.title ?? "", questionTitleContains) {
             return false
         }
         return true

@@ -60,3 +60,31 @@ public actor CodexAgentProvider: AgentProvider, AgentProjectDiscovering {
         await client.cancel(runID)
     }
 }
+
+extension CodexAgentProvider: AgentProviderSetupChecking {
+    public func setupStatus() async -> AgentProviderSetupStatus {
+        if let client = client as? CodexAppServerClient {
+            return client.setupStatus(providerID: id, displayName: displayName)
+        }
+        do {
+            try await client.prepare()
+            return AgentProviderSetupStatus(
+                providerID: id,
+                displayName: displayName,
+                state: .ready,
+                summary: "\(displayName) is ready.",
+                guidance: ""
+            )
+        } catch RocaError.agentProviderSetupRequired(let status) {
+            return status
+        } catch {
+            return AgentProviderSetupStatus(
+                providerID: id,
+                displayName: displayName,
+                state: .unknown,
+                summary: "\(displayName) setup could not be checked.",
+                guidance: error.localizedDescription
+            )
+        }
+    }
+}

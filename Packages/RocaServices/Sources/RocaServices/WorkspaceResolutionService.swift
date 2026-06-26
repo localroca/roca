@@ -3,6 +3,7 @@ import RocaCore
 
 public enum WorkspaceResolutionSource: String, Codable, Equatable, Sendable {
     case localCatalog
+    case localFilesystem
     case providerDiscovery
 }
 
@@ -132,6 +133,33 @@ public struct WorkspaceResolutionService: Sendable {
         case .missing:
             return .missing(query: projectName, providerSearched: true, candidateCount: candidates.count)
         }
+    }
+
+    public func resolveFromLocalFolders(
+        query projectName: String,
+        hint: String,
+        excluding excludedProjectNames: [String] = []
+    ) async throws -> WorkspaceResolutionOutcome {
+        let candidates = try LocalProjectFolderDiscoverer().discoverProjects(matching: projectName, hint: hint)
+        switch Self.discoveryResolution(for: candidates, query: projectName, excluding: excludedProjectNames) {
+        case .resolved(let project):
+            try? await writer?.upsert(project)
+            return .resolved(
+                WorkspaceResolvedProject(
+                    project: project,
+                    source: .localFilesystem,
+                    candidateCount: candidates.count
+                )
+            )
+        case .ambiguous(_, let candidates):
+            return .ambiguous(query: projectName, candidates: candidates, source: .localFilesystem)
+        case .missing:
+            return .missing(query: projectName, providerSearched: false, candidateCount: candidates.count)
+        }
+    }
+
+    public func remember(_ project: ProjectIdentity) async {
+        try? await writer?.upsert(project)
     }
 
     public static func discoveryResolution(

@@ -18,6 +18,10 @@ public protocol AgentApprovalDecisioning: Sendable {
     func decision(for prompt: AgentApprovalPrompt) async throws -> AgentApprovalDecision
 }
 
+public protocol AgentQuestionAnswering: Sendable {
+    func answer(for prompt: AgentQuestionPrompt) async throws -> AgentQuestionResponse
+}
+
 public struct AgentCapabilities: Codable, Equatable, Sendable {
     public var supportsStreaming: Bool
     public var supportsToolApprovals: Bool
@@ -155,6 +159,7 @@ public enum AgentEvent: Equatable, Sendable {
     case textDelta(String)
     case toolActivity(AgentToolActivity)
     case approvalRequired(AgentApprovalRequirement)
+    case questionRequired(AgentQuestionPrompt)
     case final(AgentResponse)
     case cancelled(runID: AgentRunID)
 }
@@ -248,6 +253,105 @@ public struct AgentApprovalPrompt: Codable, Equatable, Sendable {
         self.title = title
         self.detail = detail
         self.toolActivity = toolActivity
+    }
+}
+
+public struct AgentQuestionPrompt: Codable, Equatable, Sendable {
+    public var id: String
+    public var providerID: ProviderID
+    public var title: String
+    public var questions: [AgentQuestion]
+
+    public init(
+        id: String,
+        providerID: ProviderID,
+        title: String,
+        questions: [AgentQuestion]
+    ) {
+        self.id = id
+        self.providerID = providerID
+        self.title = title
+        self.questions = questions
+    }
+}
+
+public struct AgentQuestion: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var header: String
+    public var question: String
+    public var options: [AgentQuestionOption]
+    public var allowsMultipleSelection: Bool
+
+    public init(
+        id: String,
+        header: String,
+        question: String,
+        options: [AgentQuestionOption],
+        allowsMultipleSelection: Bool = false
+    ) {
+        self.id = id
+        self.header = header
+        self.question = question
+        self.options = options
+        self.allowsMultipleSelection = allowsMultipleSelection
+    }
+}
+
+public struct AgentQuestionOption: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var label: String
+    public var detail: String
+
+    public init(id: String, label: String, detail: String) {
+        self.id = id
+        self.label = label
+        self.detail = detail
+    }
+}
+
+public struct AgentQuestionAnswer: Codable, Equatable, Sendable {
+    public var questionID: String
+    public var selectedOptionLabels: [String]
+    public var freeText: String?
+
+    public init(questionID: String, selectedOptionLabels: [String], freeText: String? = nil) {
+        self.questionID = questionID
+        self.selectedOptionLabels = selectedOptionLabels
+        self.freeText = freeText
+    }
+}
+
+public struct AgentQuestionResponse: Codable, Equatable, Sendable {
+    public var answers: [AgentQuestionAnswer]
+    public var isCancelled: Bool
+
+    public init(answers: [AgentQuestionAnswer], isCancelled: Bool = false) {
+        self.answers = answers
+        self.isCancelled = isCancelled
+    }
+
+    public static let cancelled = AgentQuestionResponse(answers: [], isCancelled: true)
+}
+
+public struct DenyingAgentQuestionAnswerer: AgentQuestionAnswering {
+    public init() {}
+
+    public func answer(for prompt: AgentQuestionPrompt) async throws -> AgentQuestionResponse {
+        .cancelled
+    }
+}
+
+public actor InteractiveAgentQuestionGate: AgentQuestionAnswering {
+    public typealias QuestionPresenter = @Sendable (AgentQuestionPrompt) async -> AgentQuestionResponse
+
+    private let presenter: QuestionPresenter
+
+    public init(presenter: @escaping QuestionPresenter) {
+        self.presenter = presenter
+    }
+
+    public func answer(for prompt: AgentQuestionPrompt) async throws -> AgentQuestionResponse {
+        await presenter(prompt)
     }
 }
 
@@ -475,8 +579,8 @@ public actor InteractiveAgentApprovalGate: AgentApprovalAuthorizing, AgentApprov
         switch providerID.rawValue {
         case "codex-agent":
             "Codex"
-        case "claude-agent":
-            "Claude"
+        case "claude-code":
+            "Claude Code"
         case "cursor-agent":
             "Cursor"
         default:

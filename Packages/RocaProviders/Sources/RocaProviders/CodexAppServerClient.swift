@@ -14,15 +14,18 @@ public struct CodexAppServerConfiguration: Sendable {
     public var executableURL: URL?
     public var arguments: [String]
     public var projectDiscoveryTimeoutSeconds: TimeInterval
+    public var applicationURL: URL
 
     public init(
         executableURL: URL? = nil,
         arguments: [String] = ["app-server"],
-        projectDiscoveryTimeoutSeconds: TimeInterval = 15
+        projectDiscoveryTimeoutSeconds: TimeInterval = 15,
+        applicationURL: URL = URL(fileURLWithPath: "/Applications/Codex.app")
     ) {
         self.executableURL = executableURL
         self.arguments = arguments
         self.projectDiscoveryTimeoutSeconds = projectDiscoveryTimeoutSeconds
+        self.applicationURL = applicationURL
     }
 }
 
@@ -46,14 +49,53 @@ public struct CodexAppServerClient: CodexAgentClient {
     }
 
     public func prepare() async throws {
-        guard resolvedExecutableURL() != nil else {
-            throw RocaError.providerUnavailable(BuiltInProviderIDs.codexAgent)
+        let status = setupStatus()
+        guard status.isReady else {
+            throw RocaError.agentProviderSetupRequired(status)
         }
+    }
+
+    public func setupStatus(
+        providerID: ProviderID = BuiltInProviderIDs.codexAgent,
+        displayName: String = "Codex"
+    ) -> AgentProviderSetupStatus {
+        if resolvedExecutableURL() != nil {
+            return AgentProviderSetupStatus(
+                providerID: providerID,
+                displayName: displayName,
+                state: .ready,
+                summary: "Codex is ready.",
+                guidance: ""
+            )
+        }
+
+        let appPath = configuration.applicationURL.path
+        let appExists = FileManager.default.fileExists(atPath: appPath)
+        if appExists {
+            return AgentProviderSetupStatus(
+                providerID: providerID,
+                displayName: displayName,
+                state: .appDetectedNeedsRuntime,
+                summary: "Codex app is installed, but Roca could not find the Codex command-line runtime.",
+                guidance: "Open Codex once or install the Codex CLI, then refresh provider setup.",
+                detectedApplicationPath: appPath
+            )
+        }
+
+        return AgentProviderSetupStatus(
+            providerID: providerID,
+            displayName: displayName,
+            state: .runtimeMissing,
+            summary: "Codex is not installed for Roca.",
+            guidance: "Install Codex, then refresh provider setup.",
+            installCommand: "Install Codex from OpenAI.",
+            detectedApplicationPath: nil
+        )
     }
 
     public func run(_ request: AgentRunRequest, providerID: ProviderID) async throws -> AsyncThrowingStream<AgentEvent, Error> {
         guard let executableURL = resolvedExecutableURL() else {
-            throw RocaError.providerUnavailable(providerID)
+            throw RocaError.agentProviderSetupRequired(setupStatus(providerID: providerID, displayName: "Codex"))
         }
 
         return AsyncThrowingStream { continuation in
@@ -163,7 +205,7 @@ public struct CodexAppServerClient: CodexAgentClient {
         providerID: ProviderID
     ) async throws -> [ProjectDiscoveryCandidate] {
         guard let executableURL = resolvedExecutableURL() else {
-            throw RocaError.providerUnavailable(providerID)
+            throw RocaError.agentProviderSetupRequired(setupStatus(providerID: providerID, displayName: "Codex"))
         }
 
         let session = CodexAppServerSession(executableURL: executableURL, arguments: configuration.arguments)

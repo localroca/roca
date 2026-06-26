@@ -1,3 +1,4 @@
+import Foundation
 import RocaCore
 import RocaServices
 import RocaTestingSupport
@@ -53,6 +54,49 @@ func workspaceResolutionReportsLocalAmbiguity() async throws {
     }
     #expect(source == .localCatalog)
     #expect(candidates.map(\.id) == ["ter-admin", "ter-backend"])
+}
+
+@Test
+func workspaceResolutionDiscoversLocalFilesystemAmbiguityFromFolderHint() async throws {
+    let work = try temporaryWorkspaceWorkFolder()
+    try createProjectFolder(named: "ter-admin", under: work)
+    try createProjectFolder(named: "ter-backend", under: work)
+    try createProjectFolder(named: "ter-web", under: work)
+    try createProjectFolder(named: "uni-auth", under: work)
+    let service = WorkspaceResolutionService()
+
+    let outcome = try await service.resolveFromLocalFolders(
+        query: "ter",
+        hint: "It should be somewhere in \(work.path)"
+    )
+
+    guard case .ambiguous(_, let candidates, let source) = outcome else {
+        Issue.record("Expected local filesystem ambiguity, got \(outcome).")
+        return
+    }
+    #expect(source == .localFilesystem)
+    #expect(candidates.map(\.displayName) == ["TER Admin", "TER Backend", "TER Web"])
+    #expect(candidates.map(\.localFolderName) == ["ter-admin", "ter-backend", "ter-web"])
+}
+
+@Test
+func workspaceResolutionDiscoversDirectProjectFolderHint() async throws {
+    let work = try temporaryWorkspaceWorkFolder()
+    let projectURL = try createProjectFolder(named: "ter-backend", under: work)
+    let service = WorkspaceResolutionService()
+
+    let outcome = try await service.resolveFromLocalFolders(
+        query: "ter backend",
+        hint: "It's at \(projectURL.path)"
+    )
+
+    guard case .resolved(let resolved) = outcome else {
+        Issue.record("Expected direct project folder resolution, got \(outcome).")
+        return
+    }
+    #expect(resolved.source == .localFilesystem)
+    #expect(resolved.project.displayName == "TER Backend")
+    #expect(resolved.project.localPath == projectURL.path)
 }
 
 @Test
@@ -156,4 +200,20 @@ func workspaceResolutionPropagatesProviderDiscoveryFailure() async throws {
     await #expect(throws: DiscoveryFailure.self) {
         _ = try await service.resolve(query: "uni-auth", prompt: "what endpoints exist?", discoverer: agent)
     }
+}
+
+private func temporaryWorkspaceWorkFolder() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("roca-workspace-\(UUID().uuidString)", isDirectory: true)
+    let work = root.appendingPathComponent("Workspace/work", isDirectory: true)
+    try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+    return work
+}
+
+@discardableResult
+private func createProjectFolder(named name: String, under parent: URL) throws -> URL {
+    let url = parent.appendingPathComponent(name, isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    try "# \(name)\n".write(to: url.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+    return url
 }

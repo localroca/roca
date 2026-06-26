@@ -271,7 +271,9 @@ public struct AgentDirectiveRequest: Equatable, Sendable {
         case "codex":
             ProviderID(rawValue: "codex-agent")
         case "claude":
-            ProviderID(rawValue: "claude-agent")
+            ProviderID(rawValue: "claude-code")
+        case "claude code":
+            ProviderID(rawValue: "claude-code")
         case "cursor":
             ProviderID(rawValue: "cursor-agent")
         default:
@@ -283,8 +285,8 @@ public struct AgentDirectiveRequest: Equatable, Sendable {
         switch providerID.rawValue {
         case "codex-agent":
             "Codex"
-        case "claude-agent":
-            "Claude"
+        case "claude-code":
+            "Claude Code"
         case "cursor-agent":
             "Cursor"
         default:

@@ -53,6 +53,7 @@ public enum RocaError: Error, Equatable, Sendable, LocalizedError {
     case storageFailed(String)
     case approvalRequired(String)
     case approvalDenied(String)
+    case agentProviderSetupRequired(AgentProviderSetupStatus)
     case cancelled
 
     public var errorDescription: String? {
@@ -79,6 +80,8 @@ public enum RocaError: Error, Equatable, Sendable, LocalizedError {
             "Approval required: \(message)"
         case .approvalDenied(let message):
             "Approval denied: \(message)"
+        case .agentProviderSetupRequired(let status):
+            status.userMessage
         case .cancelled:
             "Cancelled."
         }

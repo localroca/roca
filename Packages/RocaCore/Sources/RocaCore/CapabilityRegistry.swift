@@ -82,7 +82,8 @@ public struct CapabilityDescriptor: Codable, Hashable, Sendable {
         providerID: ProviderID,
         displayName: String,
         capabilities: AgentCapabilities,
-        supportsProjectDiscovery: Bool
+        supportsProjectDiscovery: Bool,
+        approvalBehavior: CapabilityApprovalBehavior? = nil
     ) -> CapabilityDescriptor {
         CapabilityDescriptor(
             id: CapabilityID(rawValue: providerID.rawValue),
@@ -92,7 +93,7 @@ public struct CapabilityDescriptor: Codable, Hashable, Sendable {
             supportedAgentModes: capabilities.supportedModes,
             workspaceRequirement: capabilities.supportedModes.contains(.act) ? .required : .optional,
             riskLevel: capabilities.supportedModes.contains(.act) ? .high : .medium,
-            approvalBehavior: capabilities.supportsToolApprovals ? .policyDriven : .notRequired,
+            approvalBehavior: approvalBehavior ?? (capabilities.supportsToolApprovals ? .policyDriven : .notRequired),
             supportsStreaming: capabilities.supportsStreaming,
             supportsCancellation: true,
             supportsProjectDiscovery: supportsProjectDiscovery,

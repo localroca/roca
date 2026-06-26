@@ -30,7 +30,7 @@ public struct AssistantResponseContent: Equatable, Sendable, Codable {
 }
 
 public enum AssistantPromptCatalog {
-    public static let directivePromptVersion = "assistant-router-2026-06-15-v1"
+    public static let directivePromptVersion = "assistant-router-2026-06-26-v1"
     public static let responsePromptVersion = "companion-response-2026-06-14-v1"
 
     public static let directiveSystemPrompt = """
@@ -51,8 +51,9 @@ public enum AssistantPromptCatalog {
     - Use insertText only when the user explicitly asks to type, write, insert, reply, or put text into the focused field.
     - Use readSelection only when the user explicitly asks to read the current highlighted or selected text aloud.
     - If the user asks to say, tell, read, or explain a previous Roca answer out loud, use respond, not readSelection.
+    - If the user asks how to install, configure, authenticate, or set up Codex, Claude, Cursor, or an agent provider, use respond, not runAgent.
     - Use runAgent only when the user explicitly asks Roca to use an external coding/work agent such as Codex, Claude, or Cursor.
-    - For runAgent providerID, use codex-agent, claude-agent, or cursor-agent.
+    - For runAgent providerID, use codex-agent, claude-code, or cursor-agent.
     - For runAgent projectName, preserve the project phrase the user gave. Omit it only when no project is mentioned.
     - If the user says "in the X project", "for the X repo", or similar, include projectName X even if recent context mentioned a different project.
     - For runAgent prompt, include the task for the agent without "ask Codex/Claude/Cursor to".
@@ -94,8 +95,8 @@ public enum AssistantPromptCatalog {
             let bubble = clean(envelope.bubbleText)
                 ?? clean(envelope.bubble)
                 ?? clean(envelope.spokenText)
-            let details = clean(envelope.detailsMarkdown)
-                ?? clean(envelope.details)
+            let details = cleanDetails(envelope.detailsMarkdown)
+                ?? cleanDetails(envelope.details)
 
             if let bubble {
                 return AssistantResponseContent(
@@ -234,6 +235,55 @@ public enum AssistantPromptCatalog {
     private static func clean(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func cleanDetails(_ value: String?) -> String? {
+        guard let cleaned = clean(value) else {
+            return nil
+        }
+        return normalizeEscapedLineBreaks(in: cleaned)
+    }
+
+    private static func normalizeEscapedLineBreaks(in value: String) -> String {
+        guard shouldNormalizeEscapedLineBreaks(in: value) else {
+            return value
+        }
+        return value
+            .replacingOccurrences(of: #"\r\n"#, with: "\n")
+            .replacingOccurrences(of: #"\n"#, with: "\n")
+            .replacingOccurrences(of: #"\r"#, with: "\n")
+    }
+
+    private static func shouldNormalizeEscapedLineBreaks(in value: String) -> Bool {
+        guard value.contains(#"\n"#) || value.contains(#"\r"#) else {
+            return false
+        }
+        let markdownBreaks = [
+            #"\n- "#,
+            #"\n* "#,
+            #"\n> "#,
+            #"\n##"#,
+            #"\n|"#,
+            #"\n```"#,
+            #"\n\n"#
+        ]
+        if markdownBreaks.contains(where: value.contains) {
+            return true
+        }
+        if value.range(of: #"\\n\d+\.\s"#, options: .regularExpression) != nil {
+            return true
+        }
+        return !value.contains("\n") && !value.contains("\r") && escapedLineBreakCount(in: value) >= 2 && !value.contains("`")
+    }
+
+    private static func escapedLineBreakCount(in value: String) -> Int {
+        var count = 0
+        var start = value.startIndex
+        while let range = value.range(of: #"\n"#, range: start ..< value.endIndex) {
+            count += 1
+            start = range.upperBound
+        }
+        return count
     }
 
     private static func detailsRemovingDuplicatedBubble(bubble: String, details: String?) -> String? {

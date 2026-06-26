@@ -54,6 +54,7 @@ final class RocaAppModel: ObservableObject {
     @Published private(set) var assistantSpeechMuted = false
     @Published private(set) var rawTranscriptLoggingEnabled = false
     @Published private(set) var assistantDiagnosticsLoggingEnabled = false
+    @Published private(set) var agentProviderSetupStatuses: [AgentProviderSetupStatus] = []
     @Published private(set) var approvalRecords: [ApprovalRecord] = []
     @Published private(set) var approvalActionStatus = ""
     @Published private(set) var hasChatTranscriptLog = false
@@ -101,6 +102,7 @@ final class RocaAppModel: ObservableObject {
     private var assistantMessageTask: Task<Void, Never>?
     private var assistantMetricsTask: Task<Void, Never>?
     private var assistantDiagnosticsTask: Task<Void, Never>?
+    private var agentSetupCheckers: [any AgentProviderSetupChecking] = []
     private var kokoroInstallTask: Task<Void, Never>?
     private var kokoroWarmupTask: Task<Void, Never>?
     private var moonshineInstallTask: Task<Void, Never>?
@@ -160,6 +162,7 @@ final class RocaAppModel: ObservableObject {
         configureSpeechPipeline()
         configureDictationPipeline()
         configureAssistantPipeline()
+        await refreshAgentProviderSetupStatuses()
 
         observeCompanionState()
         observePlaybackState()
@@ -422,6 +425,7 @@ final class RocaAppModel: ObservableObject {
             await loadVoices(for: activeSettingsVoiceProviderID)
             await refreshMoonshineModelStatus()
             await refreshOllamaStatus()
+            await refreshAgentProviderSetupStatuses()
         }
     }
 
@@ -771,6 +775,7 @@ final class RocaAppModel: ObservableObject {
                     speechConfiguration: speechConfiguration
                 )
             )
+            await self.refreshAgentProviderSetupStatuses()
             await MainActor.run {
                 self.assistantTask = nil
             }
@@ -780,6 +785,12 @@ final class RocaAppModel: ObservableObject {
     func respondToAgentApproval(messageID: ChatMessageID, decision: AgentApprovalDecision) {
         Task {
             await assistantSession?.submitAgentApprovalDecision(messageID, decision: decision)
+        }
+    }
+
+    func respondToAgentQuestion(messageID: ChatMessageID, response: AgentQuestionResponse) {
+        Task {
+            await assistantSession?.submitAgentQuestionResponse(messageID, response: response)
         }
     }
 
@@ -1370,6 +1381,12 @@ final class RocaAppModel: ObservableObject {
         }
     }
 
+    func refreshAgentProviderSetupFromSettings() {
+        Task {
+            await refreshAgentProviderSetupStatuses()
+        }
+    }
+
     func setAssistantOllamaModel(_ modelID: String?) {
         guard let modelID, !modelID.isEmpty else {
             settings.brainRoles.removeValue(forKey: .companionRouter)
@@ -1738,12 +1755,17 @@ final class RocaAppModel: ObservableObject {
             ),
             approvalAuthorizer: agentApprovalGate
         )
+        let claudeProvider = ClaudeCodeProvider(
+            client: ClaudeCodeCLIClient(),
+            approvalAuthorizer: agentApprovalGate
+        )
+        agentSetupCheckers = [codexProvider, claudeProvider]
         let resolver = DefaultProviderResolver(
             registry: registry,
             ttsProviders: Array(ttsProviders.values),
             sttProviders: Array(sttProviders.values),
             brainProviders: [ollamaProvider],
-            agentProviders: [codexProvider],
+            agentProviders: [codexProvider, claudeProvider],
             selectedTTSProvider: { [currentSpeechSettings] in
                 currentSpeechSettings.selectedTTSProvider()
             },
@@ -1777,6 +1799,28 @@ final class RocaAppModel: ObservableObject {
                 await self?.speechOrchestrator?.stopSpeaking()
             }
         )
+    }
+
+    private func refreshAgentProviderSetupStatuses() async {
+        let checkers = agentSetupCheckers
+        guard !checkers.isEmpty else {
+            agentProviderSetupStatuses = []
+            return
+        }
+
+        let statuses = await withTaskGroup(of: AgentProviderSetupStatus.self) { group in
+            for checker in checkers {
+                group.addTask {
+                    await checker.setupStatus()
+                }
+            }
+            var collected: [AgentProviderSetupStatus] = []
+            for await status in group {
+                collected.append(status)
+            }
+            return collected.sorted { $0.displayName < $1.displayName }
+        }
+        agentProviderSetupStatuses = statuses
     }
 
     private func loadVoices(for providerID: ProviderID) async {

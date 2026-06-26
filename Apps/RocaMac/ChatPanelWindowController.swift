@@ -129,9 +129,15 @@ private struct ChatPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(model.chatMessages) { message in
-                        ChatMessageRow(message: message) { messageID, decision in
-                            model.respondToAgentApproval(messageID: messageID, decision: decision)
-                        }
+                        ChatMessageRow(
+                            message: message,
+                            onApprovalDecision: { messageID, decision in
+                                model.respondToAgentApproval(messageID: messageID, decision: decision)
+                            },
+                            onQuestionResponse: { messageID, response in
+                                model.respondToAgentQuestion(messageID: messageID, response: response)
+                            }
+                        )
                             .id(message.id)
                     }
                 }
@@ -213,6 +219,7 @@ private struct ChatPanelView: View {
 private struct ChatMessageRow: View {
     var message: ChatMessage
     var onApprovalDecision: (ChatMessageID, AgentApprovalDecision) -> Void
+    var onQuestionResponse: (ChatMessageID, AgentQuestionResponse) -> Void
 
     var body: some View {
         switch message.role {
@@ -293,6 +300,16 @@ private struct ChatMessageRow: View {
                     isPending: message.status == .pending && approval.decision == nil,
                     onDecision: { decision in
                         onApprovalDecision(message.id, decision)
+                    }
+                )
+            }
+
+            if let question = message.questionRequest {
+                QuestionPromptView(
+                    request: question,
+                    isPending: message.status == .pending && question.response == nil,
+                    onResponse: { response in
+                        onQuestionResponse(message.id, response)
                     }
                 )
             }
@@ -389,14 +406,16 @@ private struct ApprovalPromptView: View {
                     .controlSize(.small)
                     .help("Approve this request once")
 
-                    Button {
-                        onDecision(.approveForSession)
-                    } label: {
-                        Label("Always Approve", systemImage: "checkmark.seal")
+                    if approval.allowsRememberedApproval != false {
+                        Button {
+                            onDecision(.approveForSession)
+                        } label: {
+                            Label("Always Approve", systemImage: "checkmark.seal")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Remember this approval")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Remember this approval")
 
                     Button(role: .destructive) {
                         onDecision(.deny)
@@ -448,6 +467,125 @@ private struct ApprovalPromptView: View {
         case .cancel:
             .secondary
         }
+    }
+}
+
+private struct QuestionPromptView: View {
+    var request: ChatQuestionRequest
+    var isPending: Bool
+    var onResponse: (AgentQuestionResponse) -> Void
+
+    @State private var selections: [String: Set<String>] = [:]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(request.prompt.questions) { question in
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(question.header)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(question.question)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if isPending {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(question.options) { option in
+                                Button {
+                                    toggle(option, for: question)
+                                } label: {
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: isSelected(option, for: question) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(isSelected(option, for: question) ? Color.accentColor : Color.secondary)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(option.label)
+                                                .font(.callout.weight(.medium))
+                                            if !option.detail.isEmpty {
+                                                Text(option.detail)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if isPending {
+                HStack(spacing: 8) {
+                    Button {
+                        onResponse(response)
+                    } label: {
+                        Label("Submit", systemImage: "checkmark.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!isComplete)
+
+                    Button(role: .cancel) {
+                        onResponse(.cancelled)
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else if let response = request.response {
+                Label(resolvedText(for: response), systemImage: response.isCancelled ? "minus.circle.fill" : "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(response.isCancelled ? Color.secondary : Color.green)
+            }
+        }
+    }
+
+    private var isComplete: Bool {
+        request.prompt.questions.allSatisfy { question in
+            !(selections[question.id] ?? []).isEmpty
+        }
+    }
+
+    private var response: AgentQuestionResponse {
+        AgentQuestionResponse(
+            answers: request.prompt.questions.map { question in
+                let selectedIDs = selections[question.id] ?? []
+                let labels = question.options
+                    .filter { selectedIDs.contains($0.id) }
+                    .map(\.label)
+                return AgentQuestionAnswer(questionID: question.id, selectedOptionLabels: labels)
+            }
+        )
+    }
+
+    private func isSelected(_ option: AgentQuestionOption, for question: AgentQuestion) -> Bool {
+        selections[question.id]?.contains(option.id) == true
+    }
+
+    private func toggle(_ option: AgentQuestionOption, for question: AgentQuestion) {
+        var selected = selections[question.id] ?? []
+        if question.allowsMultipleSelection {
+            if selected.contains(option.id) {
+                selected.remove(option.id)
+            } else {
+                selected.insert(option.id)
+            }
+        } else {
+            selected = [option.id]
+        }
+        selections[question.id] = selected
+    }
+
+    private func resolvedText(for response: AgentQuestionResponse) -> String {
+        if response.isCancelled {
+            return "Cancelled"
+        }
+        let labels = response.answers.flatMap(\.selectedOptionLabels)
+        return labels.isEmpty ? "Answered" : "Answered: \(labels.joined(separator: ", "))"
     }
 }
 
@@ -504,8 +642,8 @@ private struct AssistantMarkdownView: View {
                 InlineMarkdownText(text: text, color: .secondary)
             }
             .padding(.vertical, 2)
-        case .code(let language, let code):
-            CodeBlockView(language: language, code: code)
+        case .code(_, let code):
+            CodeBlockView(code: code)
         case .table(let headers, let rows):
             MarkdownTableView(headers: headers, rows: rows)
         case .divider:
@@ -556,30 +694,22 @@ private struct InlineMarkdownText: View {
 }
 
 private struct CodeBlockView: View {
-    var language: String?
     var code: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            if let language, !language.isEmpty {
-                Text(language)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            ScrollView(.horizontal, showsIndicators: true) {
-                Text(code.isEmpty ? " " : code)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        ScrollView(.horizontal, showsIndicators: true) {
+            Text(code.isEmpty ? " " : code)
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+                .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
         )
     }
 }

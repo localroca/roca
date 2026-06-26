@@ -875,6 +875,287 @@
       ]
     },
     {
+      "id": "claude_unavailable_setup_guidance",
+      "title": "Claude unavailable setup guidance",
+      "description": "If Claude runtime setup is missing, Roca should show concise setup guidance instead of a raw provider error.",
+      "tags": ["agent", "claude", "setup"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "claude-code",
+        "displayName": "Claude",
+        "kind": "setupUnavailable",
+        "responseText": ""
+      },
+      "turns": [
+        {
+          "id": "ask_claude_missing_runtime",
+          "user": "Ask Claude in Uni Auth what passkey endpoints exist.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "textContains": "Claude Code CLI is not installed",
+                "detailsContains": "curl -fsSL https://claude.ai/install.sh | bash"
+              }
+            ],
+            "forbiddenSpeechTextContains": ["curl -fsSL"],
+            "forbiddenMessageTextContains": ["providerUnavailable"],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "claude_auth_setup_help",
+      "title": "Claude Code setup help",
+      "description": "If the user asks how to configure Claude auth, Roca should answer locally with concise Claude Code CLI setup guidance instead of trying to run Claude.",
+      "tags": ["agent", "claude", "setup"],
+      "agent": {
+        "providerID": "claude-code",
+        "displayName": "Claude",
+        "kind": "setupUnavailable",
+        "responseText": ""
+      },
+      "turns": [
+        {
+          "id": "ask_how_to_configure_claude_auth",
+          "user": "I installed Claude Code, how do I sign in?",
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "status": "completed",
+                "textContains": "Settings",
+                "detailsContains": "Claude Code"
+              },
+              {
+                "role": "assistant",
+                "status": "completed",
+                "detailsContains": "curl -fsSL https://claude.ai/install.sh | bash"
+              }
+            ],
+            "forbiddenMessageTextContains": ["providerUnavailable", "not configured for Roca", "API key", "Keychain", "CLAUDE_CODE_USE_BEDROCK", "Environment mode"],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "claude_ask_handoff",
+      "title": "Claude ask handoff",
+      "description": "Claude ask-mode handoffs should use the same calm intro, quiet action bubble, and formatted final result as Codex.",
+      "tags": ["agent", "claude", "handoff"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "claude-code",
+        "displayName": "Claude",
+        "kind": "noisy",
+        "responseText": "Passkeys use begin and finish endpoints."
+      },
+      "turns": [
+        {
+          "id": "ask_claude",
+          "user": "Ask Claude in Uni Auth how passkey login works.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"uni-auth\",\"prompt\":\"explain how passkey login works\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Claude found the passkey login flow.\",\"detailsMarkdown\":\"Begin login, complete the platform challenge, then finish login.\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll ask Claude to inspect Uni Auth and summarize what it finds."
+              },
+              {
+                "role": "action",
+                "text": "Claude finished.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "Claude found the passkey login flow.",
+                "detailsContains": "platform challenge"
+              }
+            ],
+            "forbiddenMessageTextContains": ["listing project files", "grep found passkey routes"],
+            "agentRequests": [
+              {
+                "providerID": "claude-code",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "passkey login",
+                "mode": "ask"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "claude_plan_question_card",
+      "title": "Claude plan question card",
+      "description": "Claude question prompts should render as chat cards and resolve into structured answers.",
+      "tags": ["agent", "claude", "question"],
+      "turns": [
+        {
+          "id": "choose_billing_plan",
+          "user": "Claude asks which billing approach to plan around.",
+          "questionPrompt": {
+            "title": "Claude needs input",
+            "providerID": "claude-code",
+            "questions": [
+              {
+                "id": "billing-approach",
+                "header": "Approach",
+                "question": "Which billing approach should Claude use?",
+                "options": [
+                  {
+                    "id": "direct",
+                    "label": "Direct Stripe",
+                    "detail": "Use Stripe metering directly."
+                  },
+                  {
+                    "id": "ledger",
+                    "label": "Internal Ledger",
+                    "detail": "Track usage internally first."
+                  }
+                ],
+                "allowsMultipleSelection": false
+              }
+            ],
+            "response": {
+              "answers": [
+                {
+                  "questionID": "billing-approach",
+                  "selectedOptionLabels": ["Internal Ledger"]
+                }
+              ],
+              "isCancelled": false
+            }
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "action",
+                "questionTitleContains": "Claude needs input",
+                "text": "Answered.",
+                "status": "completed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "claude_act_approval_card",
+      "title": "Claude act approval card",
+      "description": "Claude act-mode approvals should reuse Roca's in-chat approval card.",
+      "tags": ["agent", "claude", "approval"],
+      "turns": [
+        {
+          "id": "approve_claude_edit",
+          "user": "Claude wants approval to edit Uni Auth.",
+          "approvalPrompt": {
+            "title": "Claude File Change",
+            "providerID": "claude-code",
+            "mode": "act",
+            "workspacePath": "/workspace/uni-auth",
+            "dataScopes": ["prompt", "workspaceFiles"],
+            "actionScopes": ["readWorkspace", "runCommands", "editWorkspace"],
+            "decision": "approve"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "action",
+                "approvalTitleContains": "Claude File Change",
+                "approvalDecision": "approve",
+                "status": "completed"
+              },
+              {
+                "role": "action",
+                "text": "Approved once."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "claude_cancel_agent_retry",
+      "title": "Cancel Claude agent and retry",
+      "description": "Stopping a long-running Claude handoff should clear active turn state so the next user message is accepted.",
+      "tags": ["agent", "claude", "cancel", "retry"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "agent": {
+        "providerID": "claude-code",
+        "displayName": "Claude",
+        "kind": "hanging",
+        "responseText": ""
+      },
+      "turns": [
+        {
+          "id": "start_and_cancel",
+          "user": "Ask Claude in Uni Auth to inspect passkey endpoints.",
+          "cancelAfterAgentStarts": true,
+          "brain": {
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"uni-auth\",\"prompt\":\"inspect passkey endpoints\",\"mode\":\"ask\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "status",
+                "text": "Assistant cancelled.",
+                "status": "cancelled"
+              }
+            ],
+            "agentRequestCount": 1
+          }
+        },
+        {
+          "id": "retry_after_cancel",
+          "user": "Thanks, just answer normally now.",
+          "brain": {
+            "directiveJSON": "{\"type\":\"respond\"}",
+            "responseText": "{\"bubbleText\":\"Back with you. What should we look at next?\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Back with you. What should we look at next?"
+              }
+            ],
+            "forbiddenMessageTextContains": ["Still finishing the current turn"],
+            "agentRequestCount": 0
+          }
+        }
+      ]
+    },
+    {
       "id": "cancel_agent_retry",
       "title": "Cancel agent and retry",
       "description": "Stopping a long-running agent handoff should clear active turn state so the next user message is accepted.",

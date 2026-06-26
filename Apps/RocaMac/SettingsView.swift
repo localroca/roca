@@ -476,9 +476,55 @@ private struct AssistantSettingsPane: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            SettingsSection("Agent Providers") {
+                if model.agentProviderSetupStatuses.isEmpty {
+                    SettingsRow(label: "Status") {
+                        Text("Not checked")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(model.agentProviderSetupStatuses, id: \.providerID.rawValue) { status in
+                        SettingsRow(label: status.displayName) {
+                            AgentProviderSetupStatusView(status: status)
+                        }
+                    }
+                }
+
+                Button {
+                    model.refreshAgentProviderSetupFromSettings()
+                } label: {
+                    Label("Recheck Agent Providers", systemImage: "arrow.clockwise")
+                }
+            }
         }
         .onAppear {
             model.refreshOllamaFromSettings()
+            model.refreshAgentProviderSetupFromSettings()
+        }
+    }
+}
+
+private struct AgentProviderSetupStatusView: View {
+    var status: AgentProviderSetupStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            StatusText(isActive: status.isReady, text: status.summary)
+
+            if !status.guidance.isEmpty {
+                Text(status.guidance)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let installCommand = status.installCommand, !installCommand.isEmpty {
+                Text(installCommand)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
         }
     }
 }

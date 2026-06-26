@@ -60,8 +60,11 @@ public struct InteractionEvalSuite: Codable, Equatable, Sendable {
                 guard turnIDs.insert(turn.id).inserted else {
                     throw EvalError.invalidSuite("Duplicate turn id \(turn.id) in interaction scenario \(scenario.id).")
                 }
-                guard turn.approvalPrompt != nil || !turn.user.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw EvalError.invalidSuite("Interaction turn \(turn.id) needs user text or an approval prompt.")
+                guard turn.approvalPrompt != nil
+                        || turn.questionPrompt != nil
+                        || !turn.user.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    throw EvalError.invalidSuite("Interaction turn \(turn.id) needs user text, an approval prompt, or a question prompt.")
                 }
             }
         }
@@ -114,6 +117,7 @@ public struct InteractionEvalTurn: Codable, Equatable, Identifiable, Sendable {
     public var outputMode: AssistantOutputMode
     public var brain: InteractionBrainFixture?
     public var approvalPrompt: InteractionApprovalPromptFixture?
+    public var questionPrompt: InteractionQuestionPromptFixture?
     public var cancelAfterAgentStarts: Bool
     public var expectedFailureReason: String?
     public var expectations: InteractionTurnExpectations?
@@ -125,6 +129,7 @@ public struct InteractionEvalTurn: Codable, Equatable, Identifiable, Sendable {
         outputMode: AssistantOutputMode = .textOnly,
         brain: InteractionBrainFixture? = nil,
         approvalPrompt: InteractionApprovalPromptFixture? = nil,
+        questionPrompt: InteractionQuestionPromptFixture? = nil,
         cancelAfterAgentStarts: Bool = false,
         expectedFailureReason: String? = nil,
         expectations: InteractionTurnExpectations? = nil
@@ -135,6 +140,7 @@ public struct InteractionEvalTurn: Codable, Equatable, Identifiable, Sendable {
         self.outputMode = outputMode
         self.brain = brain
         self.approvalPrompt = approvalPrompt
+        self.questionPrompt = questionPrompt
         self.cancelAfterAgentStarts = cancelAfterAgentStarts
         self.expectedFailureReason = expectedFailureReason
         self.expectations = expectations
@@ -148,6 +154,7 @@ public struct InteractionEvalTurn: Codable, Equatable, Identifiable, Sendable {
         self.outputMode = try container.decodeIfPresent(AssistantOutputMode.self, forKey: .outputMode) ?? .textOnly
         self.brain = try container.decodeIfPresent(InteractionBrainFixture.self, forKey: .brain)
         self.approvalPrompt = try container.decodeIfPresent(InteractionApprovalPromptFixture.self, forKey: .approvalPrompt)
+        self.questionPrompt = try container.decodeIfPresent(InteractionQuestionPromptFixture.self, forKey: .questionPrompt)
         self.cancelAfterAgentStarts = try container.decodeIfPresent(Bool.self, forKey: .cancelAfterAgentStarts) ?? false
         self.expectedFailureReason = try container.decodeIfPresent(String.self, forKey: .expectedFailureReason)
         self.expectations = try container.decodeIfPresent(InteractionTurnExpectations.self, forKey: .expectations)
@@ -247,6 +254,7 @@ public enum InteractionAgentFixtureKind: String, Codable, Equatable, Sendable {
     case normal
     case noisy
     case hanging
+    case setupUnavailable
 }
 
 public struct InteractionProjectDiscoveryCandidateFixture: Codable, Equatable, Sendable {
@@ -297,6 +305,34 @@ public struct InteractionApprovalPromptFixture: Codable, Equatable, Sendable {
         self.dataScopes = dataScopes
         self.actionScopes = actionScopes
         self.decision = decision
+    }
+}
+
+public struct InteractionQuestionPromptFixture: Codable, Equatable, Sendable {
+    public var title: String
+    public var providerID: String
+    public var questions: [AgentQuestion]
+    public var response: AgentQuestionResponse?
+
+    public init(
+        title: String,
+        providerID: String = "claude-code",
+        questions: [AgentQuestion],
+        response: AgentQuestionResponse? = nil
+    ) {
+        self.title = title
+        self.providerID = providerID
+        self.questions = questions
+        self.response = response
+    }
+
+    public var prompt: AgentQuestionPrompt {
+        AgentQuestionPrompt(
+            id: "interaction-question-\(providerID)",
+            providerID: ProviderID(rawValue: providerID),
+            title: title,
+            questions: questions
+        )
     }
 }
 
@@ -363,6 +399,7 @@ public struct InteractionMessageExpectation: Codable, Equatable, Sendable {
     public var detailsContains: String?
     public var approvalTitleContains: String?
     public var approvalDecision: AgentApprovalDecision?
+    public var questionTitleContains: String?
 
     public init(
         role: ChatMessageRole? = nil,
@@ -371,7 +408,8 @@ public struct InteractionMessageExpectation: Codable, Equatable, Sendable {
         textContains: String? = nil,
         detailsContains: String? = nil,
         approvalTitleContains: String? = nil,
-        approvalDecision: AgentApprovalDecision? = nil
+        approvalDecision: AgentApprovalDecision? = nil,
+        questionTitleContains: String? = nil
     ) {
         self.role = role
         self.status = status
@@ -380,6 +418,7 @@ public struct InteractionMessageExpectation: Codable, Equatable, Sendable {
         self.detailsContains = detailsContains
         self.approvalTitleContains = approvalTitleContains
         self.approvalDecision = approvalDecision
+        self.questionTitleContains = questionTitleContains
     }
 }
 
