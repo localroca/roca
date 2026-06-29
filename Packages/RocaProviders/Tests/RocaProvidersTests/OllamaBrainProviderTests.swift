@@ -323,6 +323,112 @@ func ollamaProviderUsesNonStreamingChatResponses() async throws {
 }
 
 @Test
+func ollamaProviderRetriesContextOverflowWithLargerContext() async throws {
+    let recorder = RequestRecorder()
+    MockContextRetryChatURLProtocol.setHandler { request in
+        let requestIndex = recorder.append(request)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: requestIndex == 0 ? 400 : 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        if requestIndex == 0 {
+            let data = #"""
+            {"error":"{\"error\":{\"code\":400,\"message\":\"request (9025 tokens) exceeds the available context size (4096 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":9025,\"n_ctx\":4096}}"}
+            """#.data(using: .utf8)!
+            return (response, data)
+        }
+        let data = """
+        {
+          "message": {"role": "assistant", "content": "Ready."},
+          "done": true
+        }
+        """.data(using: .utf8)!
+        return (response, data)
+    }
+    defer {
+        MockContextRetryChatURLProtocol.setHandler(nil)
+    }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MockContextRetryChatURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let provider = OllamaBrainProvider(baseURL: URL(string: "http://127.0.0.1:11434")!, session: session)
+
+    let stream = try await provider.complete(
+        BrainRequest(
+            requestID: BrainRequestID(rawValue: "request"),
+            messages: [BrainMessage(role: .user, content: "hello")],
+            role: .generalChat,
+            modelID: "qwen3:4b-instruct",
+            context: RequestContext(selectedText: nil, activeAppBundleID: nil, activeAppName: nil, memoryIDs: []),
+            metadata: ["responseFormat": "json"]
+        )
+    )
+
+    let final = try await finalResponse(from: stream)
+    #expect(final.text == "Ready.")
+    #expect(final.metadata["ollamaContextRetry"] == "true")
+    #expect(final.metadata["ollamaPromptTokens"] == "9025")
+    #expect(final.metadata["ollamaInitialContextWindow"] == "4096")
+    #expect(final.metadata["ollamaRetriedContextWindow"] == "16384")
+
+    let requests = recorder.snapshot()
+    #expect(requests.count == 2)
+    #expect(requests.first?.timeoutInterval == 20)
+    #expect(requests.last?.timeoutInterval == 300)
+
+    let firstBody = try JSONSerialization.jsonObject(with: try #require(httpBodyData(from: requests[0]))) as? [String: Any]
+    #expect(firstBody?["options"] == nil)
+    let secondBody = try JSONSerialization.jsonObject(with: try #require(httpBodyData(from: requests[1]))) as? [String: Any]
+    let options = try #require(secondBody?["options"] as? [String: Any])
+    #expect(options["num_ctx"] as? Int == 16_384)
+}
+
+@Test
+func ollamaProviderDoesNotRetryContextOverflowAboveAutomaticCap() async throws {
+    let recorder = RequestRecorder()
+    MockContextOverflowCapChatURLProtocol.setHandler { request in
+        _ = recorder.append(request)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 400,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        let data = #"""
+        {"error":"{\"error\":{\"code\":400,\"message\":\"request (50000 tokens) exceeds the available context size (4096 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":50000,\"n_ctx\":4096}}"}
+        """#.data(using: .utf8)!
+        return (response, data)
+    }
+    defer {
+        MockContextOverflowCapChatURLProtocol.setHandler(nil)
+    }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MockContextOverflowCapChatURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let provider = OllamaBrainProvider(baseURL: URL(string: "http://127.0.0.1:11434")!, session: session)
+
+    let stream = try await provider.complete(
+        BrainRequest(
+            requestID: BrainRequestID(rawValue: "request"),
+            messages: [BrainMessage(role: .user, content: "hello")],
+            role: .generalChat,
+            modelID: "qwen3:4b-instruct",
+            context: RequestContext(selectedText: nil, activeAppBundleID: nil, activeAppName: nil, memoryIDs: []),
+            metadata: ["responseFormat": "json"]
+        )
+    )
+
+    await #expect(throws: RocaError.providerUnavailable(ProviderID(rawValue: "ollama:context-50000-over-4096"))) {
+        _ = try await finalText(from: stream)
+    }
+    #expect(recorder.snapshot().count == 1)
+}
+
+@Test
 func ollamaProviderMapsChatTimeoutsToModelTimeouts() async throws {
     MockTimeoutChatURLProtocol.setHandler { request in
         #expect(request.timeoutInterval == 123)
@@ -357,13 +463,21 @@ func ollamaProviderMapsChatTimeoutsToModelTimeouts() async throws {
 }
 
 private func finalText(from events: AsyncThrowingStream<BrainEvent, Error>) async throws -> String {
+    try await finalResponse(from: events).text
+}
+
+private func finalResponse(from events: AsyncThrowingStream<BrainEvent, Error>) async throws -> BrainResponse {
     var text = ""
+    var finalResponse: BrainResponse?
     for try await event in events {
         if case .final(let response) = event {
             text = response.text
+            finalResponse = response
         }
     }
-    return text
+    var response = try #require(finalResponse)
+    response.text = text
+    return response
 }
 
 private func httpBodyData(from request: URLRequest) -> Data? {
@@ -494,6 +608,95 @@ private final class MockTimeoutChatURLProtocol: URLProtocol, @unchecked Sendable
     }
 
     override func stopLoading() {}
+}
+
+private final class MockContextRetryChatURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let storage = MockURLProtocolStorage()
+
+    static func setHandler(_ handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?) {
+        storage.set(handler)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.storage.handler() else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class MockContextOverflowCapChatURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let storage = MockURLProtocolStorage()
+
+    static func setHandler(_ handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?) {
+        storage.set(handler)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.storage.handler() else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class RequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests: [URLRequest] = []
+
+    func append(_ request: URLRequest) -> Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        let index = requests.count
+        requests.append(request)
+        return index
+    }
+
+    func snapshot() -> [URLRequest] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return requests
+    }
 }
 
 private final class MockURLProtocolStorage: @unchecked Sendable {

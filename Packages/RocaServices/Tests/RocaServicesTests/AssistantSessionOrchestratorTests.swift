@@ -201,8 +201,8 @@ func assistantSessionMessagesIncludeBrainMetadata() async throws {
     #expect(user.metadata?.brainProviderID == ProviderID(rawValue: "test-brain"))
     #expect(user.metadata?.brainModelID == "test-model")
     #expect(user.metadata?.brainDisplayName == "Test Model")
-    #expect(user.metadata?.directivePromptVersion == "assistant-router-2026-06-26-v1")
-    #expect(user.metadata?.responsePromptVersion == "companion-response-2026-06-14-v1")
+    #expect(user.metadata?.directivePromptVersion == AssistantPromptCatalog.directivePromptVersion)
+    #expect(user.metadata?.responsePromptVersion == AssistantPromptCatalog.responsePromptVersion)
     #expect(assistant.metadata?.directiveType == .respond)
     #expect(assistant.metadata?.brainModelID == "test-model")
 }
@@ -488,6 +488,414 @@ func assistantSessionRunsResolvedAgentProjectWithMockProvider() async throws {
     #expect(messages.contains { $0.role == .assistant && $0.text.contains("ask Codex") })
     #expect(messages.contains { $0.role == .action && $0.text == "Codex finished." })
     #expect(messages.contains { $0.role == .assistant && $0.text == "Codex says uni-auth supports passkey registration." })
+}
+
+@Test
+func assistantSessionShapesDeveloperWorkflowArchitectureRequest() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Top-Level Files
+        - Package.swift
+        - RocaMac
+        - Packages/RocaServices
+        """
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runSkill","skillID":"codebase","projectName":"roca","prompt":"summarize architecture and important entry points","mode":"ask"}"#,
+                responseText: ###"{"bubbleText":"I inspected Roca locally and found the main entry points.","detailsMarkdown":"## Entry points\n- RocaMac/App"}"###
+            )
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "roca", displayName: "Roca", aliases: ["roca"], localPath: "/workspace/roca")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "In the Roca repo, summarize architecture and important entry points.",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let request = try #require(await skill.recordedRequests.first)
+    #expect(request.project.localPath == "/workspace/roca")
+    #expect(request.mode == .ask)
+    #expect(request.metadata["workflowKind"] == "architectureSummary")
+    #expect(request.prompt.contains("Roca developer workflow: architecture summary"))
+    #expect(request.prompt.contains("Inspect only the resolved workspace/project"))
+    #expect(request.prompt.contains("Prefer file paths, symbols, and short rationale"))
+    #expect(request.prompt.contains("Do not make code changes."))
+
+    let task = try #require(await orchestrator.taskSnapshot().first)
+    #expect(task.events.contains { event in
+        event.kind == .skillRunStarted
+            && event.metadata["workflowKind"] == "architectureSummary"
+    })
+}
+
+@Test
+func assistantSessionRoutesProviderlessDeveloperWorkflowAgentDirectiveToCodebaseSkill() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Top-Level Files
+        - README.md
+        - Packages
+        """
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runAgent","projectName":"roca","prompt":"summarize architecture and important entry points","mode":"ask"}"#,
+                responseText: ###"{"bubbleText":"I inspected Roca locally and found the main entry points.","detailsMarkdown":"## Entry points\n- Packages"}"###
+            )
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "roca", displayName: "Roca", aliases: ["roca"], localPath: "/workspace/roca")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "In the Roca repo, summarize architecture and important entry points.",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let request = try #require(await skill.recordedRequests.first)
+    #expect(request.skillID.rawValue == "codebase")
+    #expect(request.project.localPath == "/workspace/roca")
+    #expect(request.prompt.contains("Roca developer workflow: architecture summary"))
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text == "I'll inspect Roca locally." })
+    #expect(messages.contains { $0.role == .action && $0.text == "Local scan complete." })
+}
+
+@Test
+func assistantSessionPromotesDeveloperWorkflowPlanRequestsToPlanMode() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Search Results
+        Packages/RocaCore/Sources/RocaCore/Assistant.swift:1
+        """
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(
+            brain: ScriptedSessionBrainProvider(
+                directiveJSON: #"{"type":"runSkill","skillID":"codebase","projectName":"uni-auth","prompt":"draft an implementation plan for passkey recovery with tradeoffs","mode":"ask"}"#,
+                responseText: ###"{"bubbleText":"I drafted the local implementation plan.","detailsMarkdown":"## Plan\n- Trace passkey recovery entry points."}"###
+            )
+        ),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "For the Uni Auth repo, draft an implementation plan for passkey recovery and tradeoffs.",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let request = try #require(await skill.recordedRequests.first)
+    #expect(request.project.localPath == "/workspace/uni-auth")
+    #expect(request.mode == .plan)
+    #expect(request.metadata["workflowKind"] == "implementationPlan")
+    #expect(request.prompt.contains("Roca developer workflow: implementation plan"))
+    #expect(request.prompt.contains("Draft a concise implementation plan with meaningful tradeoffs"))
+
+    let task = try #require(await orchestrator.taskSnapshot().first)
+    #expect(task.mode == .plan)
+}
+
+@Test
+func assistantSessionCompletesFailedSkillSummaryBubbleAndRetries() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Language Summary
+        - Go files: 42
+        - JavaScript files: 3
+        """
+    )
+    let brain = FailingFirstSummaryBrainProvider(
+        directiveJSON: #"{"type":"runSkill","skillID":"codebase","projectName":"uni-auth","prompt":"what language is the project in?","mode":"ask"}"#,
+        responseText: ###"{"bubbleText":"Uni Auth is mostly Go, with some JavaScript infrastructure code.","detailsMarkdown":"## Languages\n- Go\n- JavaScript"}"###
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "Hey Roca, what language is the uni-auth project in?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    var messages = await orchestrator.messageSnapshot
+    #expect(!messages.contains { $0.status == .streaming })
+    #expect(messages.contains { $0.role == .action && $0.text == "Local scan complete." && $0.status == .completed })
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.status == .failed
+            && message.text.contains("I inspected Uni Auth, but I can't reach your assistant brain")
+    })
+    #expect(await skill.recordedRequests.count == 1)
+
+    await orchestrator.submitText("Mind trying again?", request: sessionRequest(outputMode: .textOnly))
+
+    messages = await orchestrator.messageSnapshot
+    #expect(!messages.contains { $0.status == .streaming })
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.status == .completed
+            && message.text == "Uni Auth is mostly Go, with some JavaScript infrastructure code."
+            && message.detailsMarkdown == "## Languages\n- Go\n- JavaScript"
+    })
+    #expect(await skill.recordedRequests.count == 2)
+    #expect(await brain.companionRouterRequestCount == 1)
+}
+
+@Test
+func assistantSessionRecoversUnsupportedExplicitRepoFollowUpToLocalSkill() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Language Summary
+        - Go files: 42
+        - JavaScript files: 3
+        """
+    )
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runSkill","skillID":"codebase","projectName":"uni-auth","prompt":"what language is the project in?","mode":"ask"}"#,
+            #"{"type":"unsupported","message":"No local context available for 'ter-backend' repo."}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"Uni Auth is primarily Go.","detailsMarkdown":"## Languages\n- Go\n- JavaScript infrastructure"}"###,
+            ###"{"bubbleText":"TER Backend is primarily Go too.","detailsMarkdown":"## Languages\n- Go\n- JavaScript infrastructure"}"###
+        ]
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth"),
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", aliases: ["ter-backend"], localPath: "/workspace/ter-backend")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "What language is the uni-auth project in?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText(
+        "Great, and what about the ter-backend repo?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let requests = await skill.recordedRequests
+    #expect(requests.count == 2)
+    #expect(requests.first?.project.localPath == "/workspace/uni-auth")
+    #expect(requests.last?.project.localPath == "/workspace/ter-backend")
+    #expect(requests.last?.prompt == "what language is the project in?")
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(!messages.contains { $0.text.contains("No local context available") })
+    #expect(messages.contains { $0.role == .assistant && $0.text == "TER Backend is primarily Go too." })
+}
+
+@Test
+func assistantSessionUsesBareProjectSlugInsteadOfPriorLocalSkillProject() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Language Summary
+        - Go files: 42
+        """
+    )
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runSkill","skillID":"codebase","projectName":"uni-auth","prompt":"what language is the project in?","mode":"ask"}"#,
+            #"{"type":"runSkill","skillID":"codebase","prompt":"what language is the project in?","mode":"ask"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"Uni Auth is primarily Go.","detailsMarkdown":null}"###,
+            ###"{"bubbleText":"TER Backend is primarily Go.","detailsMarkdown":null}"###
+        ]
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth"),
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", aliases: ["ter-backend"], localPath: "/workspace/ter-backend")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "What language is the uni-auth repo in?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText(
+        "And what about for ter-backend?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let requests = await skill.recordedRequests
+    #expect(requests.count == 2)
+    #expect(requests.first?.project.localPath == "/workspace/uni-auth")
+    #expect(requests.last?.project.localPath == "/workspace/ter-backend")
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text == "I'll narrow that down in TER Backend." })
+    #expect(messages.contains { $0.role == .assistant && $0.text == "TER Backend is primarily Go." })
+}
+
+@Test
+func assistantSessionDoesNotTreatHyphenatedSearchTermAsProjectSlug() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Search Results
+        routes/passkey-routes.ts:1
+        """
+    )
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runSkill","skillID":"codebase","projectName":"uni-auth","prompt":"what endpoints are supported for passkeys?","mode":"ask"}"#,
+            #"{"type":"runSkill","skillID":"codebase","prompt":"look for passkey-routes","mode":"ask"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"Uni Auth has passkey endpoints.","detailsMarkdown":null}"###,
+            ###"{"bubbleText":"I found passkey-routes in Uni Auth.","detailsMarkdown":"## Evidence\n- `routes/passkey-routes.ts`"}"###
+        ]
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth"),
+            ProjectIdentity(id: "passkey-routes", displayName: "Passkey Routes", aliases: ["passkey-routes"], localPath: "/workspace/passkey-routes")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "What endpoints are supported for passkeys in the uni-auth repo?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText(
+        "Look for passkey-routes in that repo.",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let requests = await skill.recordedRequests
+    #expect(requests.count == 2)
+    #expect(requests.last?.project.localPath == "/workspace/uni-auth")
+    #expect(requests.last?.project.localPath != "/workspace/passkey-routes")
+    #expect(requests.last?.prompt == "look for passkey-routes")
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text == "I found passkey-routes in Uni Auth." })
+}
+
+@Test
+func assistantSessionRerunsLocalSkillForShortLanguageFollowUp() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Language And Manifest Inventory
+        ### Languages
+        - Go: 42 files
+        - JavaScript: 5 files
+
+        ### Manifests
+        - `go.mod`: Go module
+        - `infra/package.json`: Node package
+        - `infra/cdk.json`: AWS CDK app
+        """
+    )
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runSkill","skillID":"codebase","projectName":"ter-backend","prompt":"what language is the project in?","mode":"ask"}"#,
+            #"{"type":"respond"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"TER Backend is primarily Go.","detailsMarkdown":null}"###,
+            ###"{"bubbleText":"Yes, TER Backend has JavaScript infrastructure under infra.","detailsMarkdown":"## Evidence\n- `infra/package.json`: Node package\n- `infra/cdk.json`: AWS CDK app"}"###
+        ]
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", aliases: ["ter-backend"], localPath: "/workspace/ter-backend")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "What language is the ter-backend project in?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText("Any javascript?", request: sessionRequest(outputMode: .textOnly))
+
+    let requests = await skill.recordedRequests
+    #expect(requests.count == 2)
+    #expect(requests.last?.project.localPath == "/workspace/ter-backend")
+    #expect(requests.last?.prompt.contains("Follow-up question:\nAny javascript?") == true)
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { message in
+        message.role == .assistant
+            && message.text == "Yes, TER Backend has JavaScript infrastructure under infra."
+            && message.detailsMarkdown?.contains("infra/package.json") == true
+    })
 }
 
 @Test
@@ -1562,6 +1970,51 @@ private actor RecordingProviderSetupInstaller: ProviderSetupInstalling {
     func install(_ request: ProviderSetupInstallRequest) async throws -> ProviderSetupInstallResult {
         requests.append(request)
         return result
+    }
+}
+
+private actor FailingFirstSummaryBrainProvider: BrainProvider {
+    let id = ProviderID(rawValue: "test-brain")
+    let displayName = "Test Brain"
+    let capabilities = BrainCapabilities(
+        supportsStreaming: false,
+        supportsToolCalls: false,
+        supportsLocalExecution: true,
+        locality: .local
+    )
+
+    private let directiveJSON: String
+    private let responseText: String
+    private var summaryRequestCount = 0
+    private(set) var companionRouterRequestCount = 0
+
+    init(directiveJSON: String, responseText: String) {
+        self.directiveJSON = directiveJSON
+        self.responseText = responseText
+    }
+
+    func prepare() async throws {}
+
+    func complete(_ request: BrainRequest) async throws -> AsyncThrowingStream<BrainEvent, Error> {
+        if request.role == .companionRouter {
+            companionRouterRequestCount += 1
+            return Self.stream(directiveJSON, providerID: id)
+        }
+
+        summaryRequestCount += 1
+        if summaryRequestCount == 1 {
+            throw RocaError.providerUnavailable(ProviderID(rawValue: "ollama"))
+        }
+        return Self.stream(responseText, providerID: id)
+    }
+
+    func cancel(_ requestID: BrainRequestID) async {}
+
+    private nonisolated static func stream(_ text: String, providerID: ProviderID) -> AsyncThrowingStream<BrainEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.final(BrainResponse(text: text, usedProvider: providerID, metadata: [:])))
+            continuation.finish()
+        }
     }
 }
 

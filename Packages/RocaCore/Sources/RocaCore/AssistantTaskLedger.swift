@@ -37,6 +37,8 @@ public enum AssistantTaskEventKind: String, Codable, CaseIterable, Sendable {
     case clarificationResolved
     case approvalRequested
     case approvalResolved
+    case skillRunStarted
+    case skillRunFinished
     case providerRunStarted
     case providerRunFinished
     case resultFormattingStarted

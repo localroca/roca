@@ -196,6 +196,37 @@ public actor RecordingSessionAgentProvider: AgentProvider, AgentProjectDiscoveri
     public func cancel(_ runID: AgentRunID) async {}
 }
 
+public actor RecordingLocalSkillWorker: LocalSkillWorking {
+    public let skillID: SkillID
+    public let displayName: String
+    public private(set) var recordedRequests: [LocalSkillRunRequest] = []
+
+    private let evidenceMarkdown: String
+    private let metadata: [String: String]
+
+    public init(
+        skillID: SkillID = SkillID(rawValue: "codebase"),
+        displayName: String = "Codebase Skill",
+        evidenceMarkdown: String,
+        metadata: [String: String] = ["toolCount": "3"]
+    ) {
+        self.skillID = skillID
+        self.displayName = displayName
+        self.evidenceMarkdown = evidenceMarkdown
+        self.metadata = metadata
+    }
+
+    public func run(_ request: LocalSkillRunRequest) async throws -> LocalSkillRunResult {
+        recordedRequests.append(request)
+        return LocalSkillRunResult(
+            runID: request.runID,
+            skillID: skillID,
+            evidenceMarkdown: evidenceMarkdown,
+            metadata: metadata
+        )
+    }
+}
+
 public actor NoisySessionAgentProvider: AgentProvider, AgentProjectDiscovering {
     public let id: ProviderID
     public let displayName: String

@@ -305,6 +305,7 @@ public enum EvalDryRunAction: String, Codable, Equatable, Sendable {
     case wouldInsert
     case wouldReadSelection
     case wouldRunAgent
+    case wouldRunSkill
     case wouldRefuseUnsupported
 }
 

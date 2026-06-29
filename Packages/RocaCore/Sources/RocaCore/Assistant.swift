@@ -125,6 +125,7 @@ public enum AssistantDirective: Equatable, Sendable {
     case insertText(String)
     case readSelection
     case runAgent(AgentDirectiveRequest)
+    case runSkill(SkillDirectiveRequest)
     case unsupported(String)
 }
 
@@ -149,6 +150,8 @@ public struct AssistantDirectiveEnvelope: Codable, Equatable, Sendable {
     public var bundleID: String?
     public var providerID: String?
     public var providerName: String?
+    public var skillID: String?
+    public var skillName: String?
     public var projectName: String?
     public var prompt: String?
     public var mode: AgentMode?
@@ -161,6 +164,8 @@ public struct AssistantDirectiveEnvelope: Codable, Equatable, Sendable {
         bundleID: String? = nil,
         providerID: String? = nil,
         providerName: String? = nil,
+        skillID: String? = nil,
+        skillName: String? = nil,
         projectName: String? = nil,
         prompt: String? = nil,
         mode: AgentMode? = nil,
@@ -172,6 +177,8 @@ public struct AssistantDirectiveEnvelope: Codable, Equatable, Sendable {
         self.bundleID = bundleID
         self.providerID = providerID
         self.providerName = providerName
+        self.skillID = skillID
+        self.skillName = skillName
         self.projectName = projectName
         self.prompt = prompt
         self.mode = mode
@@ -212,10 +219,23 @@ public struct AssistantDirectiveEnvelope: Codable, Equatable, Sendable {
                 prompt: prompt,
                 mode: mode ?? .ask
             )
-            guard request.resolvedProviderID != nil else {
-                throw RocaError.selectionUnavailable("Agent directive needs a provider.")
-            }
             return .runAgent(request)
+        case .runSkill:
+            guard let prompt = clean(prompt), !prompt.isEmpty else {
+                throw RocaError.selectionUnavailable("Skill directive needs a prompt.")
+            }
+            let request = SkillDirectiveRequest(
+                skillID: clean(skillID).map(SkillID.init(rawValue:))
+                    ?? clean(skillName).flatMap(SkillDirectiveRequest.skillID(for:)),
+                skillName: clean(skillName),
+                projectName: clean(projectName),
+                prompt: prompt,
+                mode: mode ?? .ask
+            )
+            guard request.resolvedSkillID != nil else {
+                throw RocaError.selectionUnavailable("Skill directive needs a skill.")
+            }
+            return .runSkill(request)
         case .unsupported:
             return .unsupported(clean(message) ?? "I cannot do that yet.")
         }
@@ -234,7 +254,88 @@ public enum AssistantDirectiveType: String, Codable, Sendable {
     case insertText
     case readSelection
     case runAgent
+    case runSkill
     case unsupported
+}
+
+public struct SkillID: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
+    public var rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(stringLiteral value: String) {
+        self.rawValue = value
+    }
+}
+
+public struct SkillRunID: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral {
+    public var rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(stringLiteral value: String) {
+        self.rawValue = value
+    }
+
+    public static func make() -> SkillRunID {
+        SkillRunID(rawValue: UUID().uuidString)
+    }
+}
+
+public struct SkillDirectiveRequest: Equatable, Sendable {
+    public var skillID: SkillID?
+    public var skillName: String?
+    public var projectName: String?
+    public var prompt: String
+    public var mode: AgentMode
+
+    public init(
+        skillID: SkillID?,
+        skillName: String? = nil,
+        projectName: String? = nil,
+        prompt: String,
+        mode: AgentMode = .ask
+    ) {
+        self.skillID = skillID
+        self.skillName = skillName
+        self.projectName = projectName
+        self.prompt = prompt
+        self.mode = mode
+    }
+
+    public var resolvedSkillID: SkillID? {
+        skillID ?? skillName.flatMap(Self.skillID(for:))
+    }
+
+    public var skillDisplayName: String {
+        skillName ?? resolvedSkillID.flatMap(Self.skillDisplayName(for:)) ?? "that skill"
+    }
+
+    public static func skillID(for skillName: String) -> SkillID? {
+        switch ProjectIdentityResolver.normalizedKey(skillName) {
+        case "codebase", "codebase skill", "repo", "repository", "project":
+            SkillID(rawValue: "codebase")
+        case "spreadsheet", "spreadsheet skill", "workbook":
+            SkillID(rawValue: "spreadsheet")
+        default:
+            nil
+        }
+    }
+
+    public static func skillDisplayName(for skillID: SkillID) -> String? {
+        switch skillID.rawValue {
+        case "codebase":
+            "Codebase Skill"
+        case "spreadsheet":
+            "Spreadsheet Skill"
+        default:
+            nil
+        }
+    }
 }
 
 public struct AgentDirectiveRequest: Equatable, Sendable {

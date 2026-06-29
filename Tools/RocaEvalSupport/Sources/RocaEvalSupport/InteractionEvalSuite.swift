@@ -78,6 +78,7 @@ public struct InteractionEvalScenario: Codable, Equatable, Identifiable, Sendabl
     public var tags: [String]
     public var projects: [InteractionProjectFixture]
     public var agent: InteractionAgentFixture?
+    public var localSkill: InteractionLocalSkillFixture?
     public var turns: [InteractionEvalTurn]
 
     public init(
@@ -87,6 +88,7 @@ public struct InteractionEvalScenario: Codable, Equatable, Identifiable, Sendabl
         tags: [String] = [],
         projects: [InteractionProjectFixture] = [],
         agent: InteractionAgentFixture? = nil,
+        localSkill: InteractionLocalSkillFixture? = nil,
         turns: [InteractionEvalTurn]
     ) {
         self.id = id
@@ -95,6 +97,7 @@ public struct InteractionEvalScenario: Codable, Equatable, Identifiable, Sendabl
         self.tags = tags
         self.projects = projects
         self.agent = agent
+        self.localSkill = localSkill
         self.turns = turns
     }
 
@@ -106,6 +109,7 @@ public struct InteractionEvalScenario: Codable, Equatable, Identifiable, Sendabl
         self.tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         self.projects = try container.decodeIfPresent([InteractionProjectFixture].self, forKey: .projects) ?? []
         self.agent = try container.decodeIfPresent(InteractionAgentFixture.self, forKey: .agent)
+        self.localSkill = try container.decodeIfPresent(InteractionLocalSkillFixture.self, forKey: .localSkill)
         self.turns = try container.decode([InteractionEvalTurn].self, forKey: .turns)
     }
 }
@@ -257,6 +261,33 @@ public enum InteractionAgentFixtureKind: String, Codable, Equatable, Sendable {
     case setupUnavailable
 }
 
+public struct InteractionLocalSkillFixture: Codable, Equatable, Sendable {
+    public var skillID: String
+    public var displayName: String
+    public var evidenceMarkdown: String
+    public var metadata: [String: String]
+
+    public init(
+        skillID: String = "codebase",
+        displayName: String = "Codebase Skill",
+        evidenceMarkdown: String,
+        metadata: [String: String] = [:]
+    ) {
+        self.skillID = skillID
+        self.displayName = displayName
+        self.evidenceMarkdown = evidenceMarkdown
+        self.metadata = metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.skillID = try container.decodeIfPresent(String.self, forKey: .skillID) ?? "codebase"
+        self.displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? "Codebase Skill"
+        self.evidenceMarkdown = try container.decode(String.self, forKey: .evidenceMarkdown)
+        self.metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata) ?? [:]
+    }
+}
+
 public struct InteractionProjectDiscoveryCandidateFixture: Codable, Equatable, Sendable {
     public var project: InteractionProjectFixture
     public var confidence: ProjectDiscoveryConfidence
@@ -345,6 +376,8 @@ public struct InteractionTurnExpectations: Codable, Equatable, Sendable {
     public var forbiddenSpeechTextContains: [String]
     public var agentRequestCount: Int?
     public var agentRequests: [InteractionAgentRequestExpectation]
+    public var skillRequestCount: Int?
+    public var skillRequests: [InteractionSkillRequestExpectation]
     public var diagnostics: [InteractionDiagnosticExpectation]
     public var memoryContains: [String]
     public var projectWriteIDs: [String]
@@ -358,6 +391,8 @@ public struct InteractionTurnExpectations: Codable, Equatable, Sendable {
         forbiddenSpeechTextContains: [String] = [],
         agentRequestCount: Int? = nil,
         agentRequests: [InteractionAgentRequestExpectation] = [],
+        skillRequestCount: Int? = nil,
+        skillRequests: [InteractionSkillRequestExpectation] = [],
         diagnostics: [InteractionDiagnosticExpectation] = [],
         memoryContains: [String] = [],
         projectWriteIDs: [String] = []
@@ -370,6 +405,8 @@ public struct InteractionTurnExpectations: Codable, Equatable, Sendable {
         self.forbiddenSpeechTextContains = forbiddenSpeechTextContains
         self.agentRequestCount = agentRequestCount
         self.agentRequests = agentRequests
+        self.skillRequestCount = skillRequestCount
+        self.skillRequests = skillRequests
         self.diagnostics = diagnostics
         self.memoryContains = memoryContains
         self.projectWriteIDs = projectWriteIDs
@@ -385,6 +422,8 @@ public struct InteractionTurnExpectations: Codable, Equatable, Sendable {
         self.forbiddenSpeechTextContains = try container.decodeIfPresent([String].self, forKey: .forbiddenSpeechTextContains) ?? []
         self.agentRequestCount = try container.decodeIfPresent(Int.self, forKey: .agentRequestCount)
         self.agentRequests = try container.decodeIfPresent([InteractionAgentRequestExpectation].self, forKey: .agentRequests) ?? []
+        self.skillRequestCount = try container.decodeIfPresent(Int.self, forKey: .skillRequestCount)
+        self.skillRequests = try container.decodeIfPresent([InteractionSkillRequestExpectation].self, forKey: .skillRequests) ?? []
         self.diagnostics = try container.decodeIfPresent([InteractionDiagnosticExpectation].self, forKey: .diagnostics) ?? []
         self.memoryContains = try container.decodeIfPresent([String].self, forKey: .memoryContains) ?? []
         self.projectWriteIDs = try container.decodeIfPresent([String].self, forKey: .projectWriteIDs) ?? []
@@ -430,6 +469,20 @@ public struct InteractionAgentRequestExpectation: Codable, Equatable, Sendable {
 
     public init(providerID: String? = nil, workspacePath: String? = nil, promptContains: String? = nil, mode: AgentMode? = nil) {
         self.providerID = providerID
+        self.workspacePath = workspacePath
+        self.promptContains = promptContains
+        self.mode = mode
+    }
+}
+
+public struct InteractionSkillRequestExpectation: Codable, Equatable, Sendable {
+    public var skillID: String?
+    public var workspacePath: String?
+    public var promptContains: String?
+    public var mode: AgentMode?
+
+    public init(skillID: String? = nil, workspacePath: String? = nil, promptContains: String? = nil, mode: AgentMode? = nil) {
+        self.skillID = skillID
         self.workspacePath = workspacePath
         self.promptContains = promptContains
         self.mode = mode

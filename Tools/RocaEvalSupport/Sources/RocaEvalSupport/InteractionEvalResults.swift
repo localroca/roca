@@ -1,5 +1,6 @@
 import Foundation
 import RocaCore
+import RocaServices
 
 public struct InteractionEvalRunConfiguration: Sendable {
     public var suite: InteractionEvalSuite
@@ -110,6 +111,7 @@ public struct InteractionEvalRecord: Codable, Equatable, Sendable {
     public var messages: [ChatMessage]
     public var spokenTexts: [String]
     public var agentRequests: [InteractionAgentRequestRecord]
+    public var skillRequests: [InteractionSkillRequestRecord]
     public var projectWrites: [ProjectIdentity]
     public var diagnostics: [AssistantDiagnosticEvent]
     public var assistantTasks: [AssistantTaskRecord]
@@ -132,6 +134,7 @@ public struct InteractionEvalRecord: Codable, Equatable, Sendable {
         messages: [ChatMessage],
         spokenTexts: [String],
         agentRequests: [InteractionAgentRequestRecord],
+        skillRequests: [InteractionSkillRequestRecord] = [],
         projectWrites: [ProjectIdentity],
         diagnostics: [AssistantDiagnosticEvent],
         assistantTasks: [AssistantTaskRecord],
@@ -153,6 +156,7 @@ public struct InteractionEvalRecord: Codable, Equatable, Sendable {
         self.messages = messages
         self.spokenTexts = spokenTexts
         self.agentRequests = agentRequests
+        self.skillRequests = skillRequests
         self.projectWrites = projectWrites
         self.diagnostics = diagnostics
         self.assistantTasks = assistantTasks
@@ -172,6 +176,22 @@ public struct InteractionAgentRequestRecord: Codable, Equatable, Sendable {
         self.prompt = request.prompt
         self.mode = request.mode
         self.workspacePath = request.workspacePath
+        self.metadata = request.metadata
+    }
+}
+
+public struct InteractionSkillRequestRecord: Codable, Equatable, Sendable {
+    public var skillID: String
+    public var prompt: String
+    public var mode: AgentMode
+    public var workspacePath: String?
+    public var metadata: [String: String]
+
+    public init(_ request: LocalSkillRunRequest) {
+        self.skillID = request.skillID.rawValue
+        self.prompt = request.prompt
+        self.mode = request.mode
+        self.workspacePath = request.project.localPath
         self.metadata = request.metadata
     }
 }

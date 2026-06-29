@@ -3,10 +3,12 @@ import Testing
 
 @Test
 func assistantPromptCatalogExposesStablePromptVersions() {
-    #expect(AssistantPromptCatalog.directivePromptVersion == "assistant-router-2026-06-26-v1")
+    #expect(AssistantPromptCatalog.directivePromptVersion == "assistant-router-2026-06-29-v2")
     #expect(AssistantPromptCatalog.responsePromptVersion == "companion-response-2026-06-14-v1")
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"readSelection"}"#))
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"runAgent""#))
+    #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"runSkill""#))
+    #expect(AssistantPromptCatalog.directiveSystemPrompt.contains("explicit local developer workflow requests"))
 }
 
 @Test

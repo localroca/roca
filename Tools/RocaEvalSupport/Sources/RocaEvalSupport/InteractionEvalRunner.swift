@@ -47,6 +47,7 @@ public struct InteractionEvalRunner: Sendable {
     ) async throws -> [InteractionEvalRecord] {
         let brain = try brainProvider(for: scenario, configuration: configuration)
         let agentBundle = makeAgent(from: scenario.agent)
+        let skillBundle = makeLocalSkill(from: scenario.localSkill)
         let speech = RecordingSessionSpeech()
         let diagnostics = InteractionDiagnosticsRecorder()
         let writer = RecordingProjectWriter()
@@ -60,6 +61,7 @@ public struct InteractionEvalRunner: Sendable {
             contextProvider: StaticSessionContextProvider(),
             projectCatalog: StaticProjectIdentityCatalog(scenario.projects.map(\.project)),
             projectWriter: writer,
+            localSkillWorkers: skillBundle.workers,
             stopSpeech: {}
         )
         let diagnosticsTask = Task {
@@ -77,6 +79,7 @@ public struct InteractionEvalRunner: Sendable {
             let speechStart = await speech.spokenTexts.count
             let diagnosticStart = await diagnostics.events.count
             let agentRequestStart = await agentRequestRecords(from: agentBundle.provider).count
+            let skillRequestStart = await skillBundle.requests().count
             let projectWriteStart = await writer.upsertedProjects.count
             let brainRequestStart = await brain.requests().count
 
@@ -95,12 +98,14 @@ public struct InteractionEvalRunner: Sendable {
             let allSpeech = await speech.spokenTexts
             let allDiagnostics = await diagnostics.events
             let allAgentRequests = await agentRequestRecords(from: agentBundle.provider)
+            let allSkillRequests = await skillBundle.requests()
             let allProjectWrites = await writer.upsertedProjects
             let allBrainRequests = await brain.requests()
             let assistantTasks = await orchestrator.taskSnapshot()
             let newSpeech = Array(allSpeech.dropFirst(speechStart))
             let newDiagnostics = Array(allDiagnostics.dropFirst(diagnosticStart))
             let newAgentRequests = Array(allAgentRequests.dropFirst(agentRequestStart))
+            let newSkillRequests = Array(allSkillRequests.dropFirst(skillRequestStart))
             let newProjectWrites = Array(allProjectWrites.dropFirst(projectWriteStart))
             let newBrainRequests = Array(allBrainRequests.dropFirst(brainRequestStart))
             let failures = failuresForTurn(
@@ -108,6 +113,7 @@ public struct InteractionEvalRunner: Sendable {
                 messages: messages,
                 spokenTexts: newSpeech,
                 agentRequests: newAgentRequests,
+                skillRequests: newSkillRequests,
                 projectWrites: newProjectWrites,
                 diagnostics: newDiagnostics,
                 brainRequests: newBrainRequests
@@ -131,6 +137,7 @@ public struct InteractionEvalRunner: Sendable {
                     messages: messages,
                     spokenTexts: newSpeech,
                     agentRequests: newAgentRequests,
+                    skillRequests: newSkillRequests,
                     projectWrites: newProjectWrites,
                     diagnostics: newDiagnostics,
                     assistantTasks: assistantTasks,
@@ -199,6 +206,21 @@ public struct InteractionEvalRunner: Sendable {
         case .setupUnavailable:
             let provider = SetupRequiredSessionAgentProvider(id: providerID, displayName: fixture.displayName)
             return InteractionAgentBundle(provider: provider, hanging: nil)
+        }
+    }
+
+    private func makeLocalSkill(from fixture: InteractionLocalSkillFixture?) -> InteractionLocalSkillBundle {
+        guard let fixture else {
+            return InteractionLocalSkillBundle(workers: [], requests: { [] })
+        }
+        let worker = RecordingLocalSkillWorker(
+            skillID: SkillID(rawValue: fixture.skillID),
+            displayName: fixture.displayName,
+            evidenceMarkdown: fixture.evidenceMarkdown,
+            metadata: fixture.metadata
+        )
+        return InteractionLocalSkillBundle(workers: [worker]) {
+            await worker.recordedRequests.map(InteractionSkillRequestRecord.init)
         }
     }
 
@@ -305,6 +327,7 @@ public struct InteractionEvalRunner: Sendable {
         messages: [ChatMessage],
         spokenTexts: [String],
         agentRequests: [InteractionAgentRequestRecord],
+        skillRequests: [InteractionSkillRequestRecord],
         projectWrites: [ProjectIdentity],
         diagnostics: [AssistantDiagnosticEvent],
         brainRequests: [InteractionBrainRequestRecord]
@@ -358,6 +381,13 @@ public struct InteractionEvalRunner: Sendable {
         }
         for expectation in expectations.agentRequests where !agentRequests.contains(where: { matches(agentRequest: $0, expectation: expectation) }) {
             failures.append("Missing agent request expectation: \(describe(expectation))")
+        }
+
+        if let skillRequestCount = expectations.skillRequestCount, skillRequests.count != skillRequestCount {
+            failures.append("Expected \(skillRequestCount) skill requests, got \(skillRequests.count).")
+        }
+        for expectation in expectations.skillRequests where !skillRequests.contains(where: { matches(skillRequest: $0, expectation: expectation) }) {
+            failures.append("Missing skill request expectation: \(describe(expectation))")
         }
 
         for expectation in expectations.diagnostics where !diagnostics.contains(where: { matches(diagnostic: $0, expectation: expectation) }) {
@@ -431,6 +461,25 @@ public struct InteractionEvalRunner: Sendable {
     }
 
     private func matches(
+        skillRequest: InteractionSkillRequestRecord,
+        expectation: InteractionSkillRequestExpectation
+    ) -> Bool {
+        if let skillID = expectation.skillID, skillRequest.skillID != skillID {
+            return false
+        }
+        if let workspacePath = expectation.workspacePath, skillRequest.workspacePath != workspacePath {
+            return false
+        }
+        if let promptContains = expectation.promptContains, !contains(skillRequest.prompt, promptContains) {
+            return false
+        }
+        if let mode = expectation.mode, skillRequest.mode != mode {
+            return false
+        }
+        return true
+    }
+
+    private func matches(
         diagnostic: AssistantDiagnosticEvent,
         expectation: InteractionDiagnosticExpectation
     ) -> Bool {
@@ -456,6 +505,17 @@ public struct InteractionEvalRunner: Sendable {
     private func describe(_ expectation: InteractionAgentRequestExpectation) -> String {
         [
             expectation.providerID.map { "provider=\($0)" },
+            expectation.workspacePath.map { "workspace=\($0)" },
+            expectation.promptContains.map { "prompt~=\($0)" },
+            expectation.mode.map { "mode=\($0.rawValue)" }
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+    }
+
+    private func describe(_ expectation: InteractionSkillRequestExpectation) -> String {
+        [
+            expectation.skillID.map { "skill=\($0)" },
             expectation.workspacePath.map { "workspace=\($0)" },
             expectation.promptContains.map { "prompt~=\($0)" },
             expectation.mode.map { "mode=\($0.rawValue)" }
@@ -491,6 +551,11 @@ public struct InteractionEvalRunner: Sendable {
 private struct InteractionAgentBundle: Sendable {
     var provider: (any AgentProvider)?
     var hanging: HangingSessionAgentProvider?
+}
+
+private struct InteractionLocalSkillBundle: Sendable {
+    var workers: [any LocalSkillWorking]
+    var requests: @Sendable () async -> [InteractionSkillRequestRecord]
 }
 
 private struct InteractionBrainProviderBundle: Sendable {

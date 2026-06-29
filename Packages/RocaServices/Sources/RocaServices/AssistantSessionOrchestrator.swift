@@ -29,6 +29,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private let applicationCommands: any ApplicationCommandExecuting
     private let contextProvider: any AssistantContextProviding
     private let workspaceResolver: WorkspaceResolutionService
+    private let localSkillWorkers: [SkillID: any LocalSkillWorking]
     private let taskLedger: any AssistantTaskLedger
     private let readSelectionCommand: ReadSelectionCommand?
     private let providerSetupInstaller: any ProviderSetupInstalling
@@ -55,6 +56,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private var conversationMessages: [BrainMessage] = []
     private var lastContextPacket: AssistantContextPacket?
     private var pendingProjectClarification: PendingProjectClarification?
+    private var pendingDirectiveRetry: PendingDirectiveRetry?
     private var stateContinuations: [UUID: AsyncStream<AssistantState>.Continuation] = [:]
     private var messageContinuations: [UUID: AsyncStream<[ChatMessage]>.Continuation] = [:]
     private var metricsContinuations: [UUID: AsyncStream<AssistantTurnMetrics>.Continuation] = [:]
@@ -136,6 +138,7 @@ public actor DefaultAssistantSessionOrchestrator {
         contextProvider: any AssistantContextProviding = DefaultAssistantContextProvider(),
         projectCatalog: (any ProjectIdentityCatalog)? = nil,
         projectWriter: (any ProjectIdentityWriting)? = nil,
+        localSkillWorkers: [any LocalSkillWorking] = [CodebaseSkillWorker()],
         taskLedger: any AssistantTaskLedger = InMemoryAssistantTaskLedger(),
         readSelectionCommand: ReadSelectionCommand? = nil,
         providerSetupInstaller: any ProviderSetupInstalling = DefaultProviderSetupInstaller(),
@@ -151,6 +154,7 @@ public actor DefaultAssistantSessionOrchestrator {
         self.contextProvider = contextProvider
         let resolvedProjectWriter = projectWriter ?? (projectCatalog as? any ProjectIdentityWriting)
         self.workspaceResolver = WorkspaceResolutionService(catalog: projectCatalog, writer: resolvedProjectWriter)
+        self.localSkillWorkers = Dictionary(uniqueKeysWithValues: localSkillWorkers.map { ($0.skillID, $0) })
         self.taskLedger = taskLedger
         self.readSelectionCommand = readSelectionCommand
         self.providerSetupInstaller = providerSetupInstaller
@@ -517,6 +521,27 @@ public actor DefaultAssistantSessionOrchestrator {
             activeBrainRequestID = request.turnID
 
             timing.directiveStartedAt = Date()
+            if try await handlePendingDirectiveRetryIfNeeded(
+                input: input,
+                request: request,
+                context: context,
+                brainProvider: brainProvider,
+                timing: &timing
+            ) {
+                if timing.directiveFinishedAt == nil {
+                    timing.directiveFinishedAt = Date()
+                }
+                emitDiagnostic(
+                    kind: .turnCompleted,
+                    turnID: request.turnID,
+                    phase: "finish",
+                    directiveType: timing.directiveType,
+                    outcome: AssistantTurnOutcome.completed.rawValue,
+                    metadata: diagnosticMetadata(for: request)
+                )
+                emitMetrics(timing.snapshot(outcome: .completed))
+                return
+            }
             if try await handlePendingProjectClarificationIfNeeded(
                 input: input,
                 request: request,
@@ -594,7 +619,9 @@ public actor DefaultAssistantSessionOrchestrator {
             let failurePhase = Self.brainFailurePhase(from: timing)
             let recoveryMessage = Self.brainRecoveryMessage(for: error, phase: failurePhase)
             let message = recoveryMessage ?? error.localizedDescription
-            appendStatus(message, status: .failed, request: request)
+            if !completeUnfinishedAssistantMessages(turnID: request.turnID, text: message, status: .failed) {
+                appendStatus(message, status: .failed, request: request)
+            }
             setState(.failed(message))
             await emit(.offline(reason: message), message: message, correlationID: request.turnID.rawValue)
             emitDiagnostic(
@@ -637,10 +664,11 @@ public actor DefaultAssistantSessionOrchestrator {
         let events = try await provider.complete(brainRequest)
         let response = try await Self.finalBrainText(from: events)
         do {
-            return try AssistantPromptCatalog.parseDirective(response)
+            let directive = try AssistantPromptCatalog.parseDirective(response)
+            return recoveredLocalSkillFollowUpDirective(from: directive, input: input)
         } catch {
             if let repaired = Self.repairedDirective(from: response) {
-                return repaired
+                return recoveredLocalSkillFollowUpDirective(from: repaired, input: input)
             }
             throw AssistantRoutingRecoveryError()
         }
@@ -938,6 +966,61 @@ public actor DefaultAssistantSessionOrchestrator {
         return sections.joined(separator: "\n\n")
     }
 
+    private func handlePendingDirectiveRetryIfNeeded(
+        input: String,
+        request: AssistantSessionTurnRequest,
+        context: AssistantLocalContext,
+        brainProvider: any BrainProvider,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> Bool {
+        guard Self.isRetryRequest(input) else {
+            return false
+        }
+        guard let retry = pendingDirectiveRetry, retry.isFresh else {
+            pendingDirectiveRetry = nil
+            return false
+        }
+
+        pendingDirectiveRetry = nil
+        timing.directiveType = retry.directive.metricType
+        timing.directiveFinishedAt = Date()
+        emitDiagnostic(
+            kind: .directiveResolved,
+            turnID: request.turnID,
+            phase: "retry",
+            directiveType: retry.directive.metricType,
+            outcome: "retry",
+            metadata: diagnosticMetadata(for: request)
+        )
+
+        switch retry.directive {
+        case .runSkill(let directive):
+            try await handleSkillDirective(
+                directive,
+                input: retry.originalUserInput,
+                request: request,
+                context: context,
+                brainProvider: brainProvider,
+                timing: &timing,
+                resolvedProjectOverride: retry.resolvedProject
+            )
+            return true
+        case .runAgent(let directive):
+            try await handleAgentDirective(
+                directive,
+                input: retry.originalUserInput,
+                request: request,
+                context: context,
+                brainProvider: brainProvider,
+                timing: &timing,
+                resolvedProjectOverride: retry.resolvedProject
+            )
+            return true
+        default:
+            return false
+        }
+    }
+
     private func handlePendingProjectClarificationIfNeeded(
         input: String,
         request: AssistantSessionTurnRequest,
@@ -951,9 +1034,9 @@ public actor DefaultAssistantSessionOrchestrator {
 
         if Self.isProjectClarificationCancellation(input) {
             pendingProjectClarification = nil
-            timing.directiveType = .runAgent
+            timing.directiveType = pending.directiveType
             timing.directiveFinishedAt = Date()
-            let message = "No problem, I won't hand that to \(pending.providerName)."
+            let message = "No problem, I won't run \(pending.providerName)."
             await recordTaskEvent(
                 pending.taskID,
                 kind: .cancelled,
@@ -962,7 +1045,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 phase: "projectClarification",
                 summary: message
             )
-            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: pending.directiveType)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
             try await speak(message, request: request, timing: &timing)
@@ -983,7 +1066,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 pendingProjectClarification = nil
                 var directive = currentPending.directive
                 directive.projectName = resolved.project.displayName
-                timing.directiveType = .runAgent
+                timing.directiveType = currentPending.directiveType
                 timing.directiveFinishedAt = Date()
                 await recordTaskEvent(
                     currentPending.taskID,
@@ -1005,29 +1088,29 @@ public actor DefaultAssistantSessionOrchestrator {
                     turnID: request.turnID,
                     phase: "projectFolderHint",
                     providerID: currentPending.providerID,
-                    directiveType: .runAgent,
+                    directiveType: currentPending.directiveType,
                     outcome: "resolved",
                     metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(resolved.candidateCount ?? 0)])
                 )
-                try await handleAgentDirective(
-                    directive,
+                try await resumePendingProjectClarification(
+                    currentPending,
+                    directive: directive,
                     input: currentPending.originalUserInput,
                     request: request,
                     context: context,
                     brainProvider: brainProvider,
                     timing: &timing,
-                    resolvedProjectOverride: resolved.project,
-                    existingTaskID: currentPending.taskID
+                    resolvedProject: resolved.project
                 )
                 return true
             case .ambiguous(_, let candidates, _):
                 let response = Self.projectClarificationResponse(for: candidates, query: correctedQuery)
-                let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+                let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: currentPending.directiveType)
                 completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
                 currentPending.candidates = candidates
                 currentPending.questionMessageID = id
                 pendingProjectClarification = currentPending
-                timing.directiveType = .runAgent
+                timing.directiveType = currentPending.directiveType
                 timing.directiveFinishedAt = Date()
                 await recordTaskEvent(
                     currentPending.taskID,
@@ -1043,7 +1126,7 @@ public actor DefaultAssistantSessionOrchestrator {
                     turnID: request.turnID,
                     phase: "projectFolderHint",
                     providerID: currentPending.providerID,
-                    directiveType: .runAgent,
+                    directiveType: currentPending.directiveType,
                     outcome: "ambiguous",
                     metadata: diagnosticMetadata(for: request, extra: ["candidateCount": String(candidates.count)])
                 )
@@ -1052,10 +1135,10 @@ public actor DefaultAssistantSessionOrchestrator {
                 return true
             case .missing:
                 let message = "I looked there, but couldn't find a project matching \(correctedQuery). Please give me a more specific folder or project name."
-                let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+                let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: currentPending.directiveType)
                 completeMessage(id, text: message, status: .completed)
                 pendingProjectClarification = currentPending
-                timing.directiveType = .runAgent
+                timing.directiveType = currentPending.directiveType
                 timing.directiveFinishedAt = Date()
                 await recordTaskEvent(
                     currentPending.taskID,
@@ -1075,11 +1158,11 @@ public actor DefaultAssistantSessionOrchestrator {
 
         if currentPending.candidates.isEmpty {
             let message = "Got it, \(correctedQuery). Where should I look for that project folder?"
-            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: currentPending.directiveType)
             completeMessage(id, text: message, status: .completed)
             currentPending.questionMessageID = id
             pendingProjectClarification = currentPending
-            timing.directiveType = .runAgent
+            timing.directiveType = currentPending.directiveType
             timing.directiveFinishedAt = Date()
             await recordTaskEvent(
                 currentPending.taskID,
@@ -1100,7 +1183,7 @@ public actor DefaultAssistantSessionOrchestrator {
             pendingProjectClarification = nil
             var directive = currentPending.directive
             directive.projectName = project.displayName
-            timing.directiveType = .runAgent
+            timing.directiveType = currentPending.directiveType
             timing.directiveFinishedAt = Date()
             await recordTaskEvent(
                 currentPending.taskID,
@@ -1123,7 +1206,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 turnID: request.turnID,
                 phase: "projectClarification",
                 providerID: currentPending.providerID,
-                directiveType: .runAgent,
+                directiveType: currentPending.directiveType,
                 outcome: "resumed",
                 metadata: diagnosticMetadata(
                     for: request,
@@ -1136,20 +1219,20 @@ public actor DefaultAssistantSessionOrchestrator {
                     ]
                 )
             )
-            try await handleAgentDirective(
-                directive,
+            try await resumePendingProjectClarification(
+                currentPending,
+                directive: directive,
                 input: currentPending.originalUserInput,
                 request: request,
                 context: context,
                 brainProvider: brainProvider,
                 timing: &timing,
-                resolvedProjectOverride: project,
-                existingTaskID: currentPending.taskID
+                resolvedProject: project
             )
             return true
         case .ambiguous(_, let candidates):
             pendingProjectClarification?.candidates = candidates
-            timing.directiveType = .runAgent
+            timing.directiveType = currentPending.directiveType
             timing.directiveFinishedAt = Date()
             let response = Self.projectClarificationResponse(for: candidates, query: currentPending.query)
             await recordTaskEvent(
@@ -1161,7 +1244,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 summary: response.conversationText,
                 metadata: ["candidateCount": String(candidates.count)]
             )
-            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: currentPending.directiveType)
             completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
             rememberAssistantObservation(response.bubbleText)
             try await speak(response.bubbleText, request: request, timing: &timing)
@@ -1179,7 +1262,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 pendingProjectClarification = nil
                 return false
             }
-            timing.directiveType = .runAgent
+            timing.directiveType = currentPending.directiveType
             timing.directiveFinishedAt = Date()
             let response = Self.projectClarificationResponse(
                 for: currentPending.candidates,
@@ -1194,11 +1277,52 @@ public actor DefaultAssistantSessionOrchestrator {
                 phase: "projectClarification",
                 summary: response.conversationText
             )
-            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runAgent)
+            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: currentPending.directiveType)
             completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
             rememberAssistantObservation(response.bubbleText)
             try await speak(response.bubbleText, request: request, timing: &timing)
             return true
+        }
+    }
+
+    private func resumePendingProjectClarification(
+        _ pending: PendingProjectClarification,
+        directive: AgentDirectiveRequest,
+        input: String,
+        request: AssistantSessionTurnRequest,
+        context: AssistantLocalContext,
+        brainProvider: any BrainProvider,
+        timing: inout AssistantTurnTimingBuilder,
+        resolvedProject: ProjectIdentity
+    ) async throws {
+        if let skillID = pending.localSkillID {
+            let skillDirective = SkillDirectiveRequest(
+                skillID: skillID,
+                projectName: resolvedProject.displayName,
+                prompt: directive.prompt,
+                mode: directive.mode
+            )
+            try await handleSkillDirective(
+                skillDirective,
+                input: input,
+                request: request,
+                context: context,
+                brainProvider: brainProvider,
+                timing: &timing,
+                resolvedProjectOverride: resolvedProject,
+                existingTaskID: pending.taskID
+            )
+        } else {
+            try await handleAgentDirective(
+                directive,
+                input: input,
+                request: request,
+                context: context,
+                brainProvider: brainProvider,
+                timing: &timing,
+                resolvedProjectOverride: resolvedProject,
+                existingTaskID: pending.taskID
+            )
         }
     }
 
@@ -1309,8 +1433,30 @@ public actor DefaultAssistantSessionOrchestrator {
                 setState(.stopped)
             }
         case .runAgent(let agentRequest):
-            try await handleAgentDirective(
-                contextualizedAgentDirective(agentRequest, userInput: input),
+            let contextualized = contextualizedAgentDirective(agentRequest, userInput: input)
+            if contextualized.resolvedProviderID == nil,
+               let skillRequest = Self.skillDirective(fromProviderlessAgentDirective: contextualized, userInput: input) {
+                try await handleSkillDirective(
+                    contextualizedSkillDirective(skillRequest, userInput: input),
+                    input: input,
+                    request: request,
+                    context: context,
+                    brainProvider: provider,
+                    timing: &timing
+                )
+            } else {
+                try await handleAgentDirective(
+                    contextualized,
+                    input: input,
+                    request: request,
+                    context: context,
+                    brainProvider: provider,
+                    timing: &timing
+                )
+            }
+        case .runSkill(let skillRequest):
+            try await handleSkillDirective(
+                contextualizedSkillDirective(skillRequest, userInput: input),
                 input: input,
                 request: request,
                 context: context,
@@ -1321,6 +1467,301 @@ public actor DefaultAssistantSessionOrchestrator {
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: directive.metricType)
             completeMessage(id, text: message, status: .completed)
             try await speak(message, request: request, timing: &timing)
+        }
+    }
+
+    private func handleSkillDirective(
+        _ directive: SkillDirectiveRequest,
+        input: String,
+        request: AssistantSessionTurnRequest,
+        context: AssistantLocalContext,
+        brainProvider: any BrainProvider,
+        timing: inout AssistantTurnTimingBuilder,
+        resolvedProjectOverride: ProjectIdentity? = nil,
+        existingTaskID: AssistantTaskID? = nil
+    ) async throws {
+        try checkTurnStillActive(request.turnID)
+        guard brainProvider.capabilities.locality == .local else {
+            let message = "I can do that locally, but your current assistant brain is not local. Choose a local model first, or explicitly ask Codex or Claude."
+            let id = appendAssistantMessage(message, status: .failed, request: request, directiveType: .runSkill)
+            completeMessage(id, text: message, status: .failed)
+            try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
+            return
+        }
+
+        guard let skillID = directive.resolvedSkillID,
+              let worker = localSkillWorkers[skillID]
+        else {
+            let message = "I don't have that local skill yet."
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runSkill)
+            completeMessage(id, text: message, status: .completed)
+            try await speak(message, request: request, timing: &timing)
+            return
+        }
+
+        guard directive.mode != .act else {
+            let message = "\(worker.displayName) is read-only for now. Ask Codex or Claude if you want code changes."
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runSkill)
+            completeMessage(id, text: message, status: .completed)
+            try await speak(message, request: request, timing: &timing)
+            return
+        }
+
+        guard directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            let message = "Which project should I inspect locally?"
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runSkill)
+            completeMessage(id, text: message, status: .completed)
+            try await speak(message, request: request, timing: &timing)
+            return
+        }
+
+        let taskID: AssistantTaskID
+        if let existingTaskID {
+            taskID = existingTaskID
+        } else {
+            taskID = await createSkillTask(directive: directive, input: input, request: request, skillID: skillID)
+        }
+        activeAssistantTaskID = taskID
+        defer {
+            if activeAssistantTaskID == taskID {
+                activeAssistantTaskID = nil
+            }
+        }
+
+        let resolvedProject: (project: ProjectIdentity?, shouldContinue: Bool)
+        if let resolvedProjectOverride {
+            resolvedProject = (resolvedProjectOverride, true)
+        } else {
+            resolvedProject = try await resolveProjectForSkill(
+                directive: directive,
+                skillID: skillID,
+                skillName: worker.displayName,
+                userInput: input,
+                request: request,
+                taskID: taskID,
+                timing: &timing
+            )
+        }
+        guard resolvedProject.shouldContinue, let project = resolvedProject.project else {
+            return
+        }
+
+        let intro = Self.skillIntroText(
+            skillName: worker.displayName,
+            project: project,
+            mode: directive.mode,
+            userInput: input,
+            prompt: directive.prompt
+        )
+        let introID = appendAssistantMessage(intro, status: .completed, request: request, directiveType: .runSkill)
+        completeMessage(introID, text: intro, status: .completed)
+        try await speak(intro, request: request, timing: &timing, finishWhenDone: false)
+
+        setState(.acting("Scanning \(project.displayName)"))
+        let actionID = appendActionMessage("Scanning \(project.displayName) locally...", status: .streaming, request: request, directiveType: .runSkill)
+        timing.actionStartedAt = Date()
+        let runID = SkillRunID.make()
+        let workflowKind = Self.developerWorkflowKind(for: input, directive: directive)
+        var metadata = [
+            "skillRunID": runID.rawValue,
+            "skillID": skillID.rawValue,
+            "skillMode": directive.mode.rawValue,
+            "projectID": project.id.rawValue,
+            "projectName": project.displayName
+        ]
+        if let workflowKind {
+            metadata["workflowKind"] = workflowKind.rawValue
+        }
+        await recordTaskEvent(
+            taskID,
+            kind: .skillRunStarted,
+            status: .running,
+            turnID: request.turnID,
+            phase: "skillRun",
+            summary: "\(worker.displayName) started.",
+            metadata: metadata
+        )
+        emitDiagnostic(
+            kind: .skillRunStarted,
+            turnID: request.turnID,
+            phase: "skillRun",
+            directiveType: .runSkill,
+            metadata: diagnosticMetadata(
+                for: request,
+                extra: [
+                    "skillID": skillID.rawValue,
+                    "skillMode": directive.mode.rawValue,
+                    "workspaceResolved": "true"
+                ].merging(workflowKind.map { ["workflowKind": $0.rawValue] } ?? [:]) { current, _ in current }
+            )
+        )
+
+        var resultMessageID: ChatMessageID?
+        do {
+            let result = try await worker.run(
+                LocalSkillRunRequest(
+                    runID: runID,
+                    skillID: skillID,
+                    prompt: directive.prompt,
+                    mode: directive.mode,
+                    project: project,
+                    userInput: input,
+                    metadata: workflowKind.map { ["workflowKind": $0.rawValue] } ?? [:]
+                )
+            )
+            try Task.checkCancellation()
+            try checkTurnStillActive(request.turnID)
+            timing.actionFinishedAt = Date()
+            completeMessage(actionID, text: "Local scan complete.", status: .completed)
+            setState(.acting("Summarizing findings"))
+            await recordTaskEvent(
+                taskID,
+                kind: .skillRunFinished,
+                status: .running,
+                turnID: request.turnID,
+                phase: "skillRun",
+                summary: "\(worker.displayName) returned local evidence.",
+                metadata: result.metadata
+            )
+
+            let assistantMessageID = appendAssistantMessage(
+                "",
+                status: .streaming,
+                request: request,
+                directiveType: .runSkill,
+                brainRole: .generalChat
+            )
+            resultMessageID = assistantMessageID
+            await recordTaskEvent(
+                taskID,
+                kind: .resultFormattingStarted,
+                status: .formattingResult,
+                turnID: request.turnID,
+                phase: "skillResultFormatting",
+                summary: "Formatting \(worker.displayName)'s result."
+            )
+            timing.responseBrainStartedAt = Date()
+            let response = try await completeAssistantResponse(
+                input: Self.skillResultFormattingPrompt(
+                    userInput: input,
+                    skillName: worker.displayName,
+                    project: project,
+                    localEvidence: result.evidenceMarkdown
+                ),
+                request: request,
+                context: context,
+                provider: brainProvider,
+                messageID: assistantMessageID
+            )
+            timing.responseBrainFinishedAt = Date()
+            completeMessage(
+                assistantMessageID,
+                text: response.bubbleText,
+                detailsMarkdown: response.detailsMarkdown,
+                status: .completed
+            )
+            await recordTaskEvent(
+                taskID,
+                kind: .resultFormatted,
+                status: .formattingResult,
+                turnID: request.turnID,
+                phase: "skillResultFormatting",
+                summary: response.bubbleText
+            )
+            let contextPacket = AssistantContextPacket(
+                currentTask: AssistantAgentTaskContext(
+                    providerID: ProviderID(rawValue: "local-skill"),
+                    providerName: worker.displayName,
+                    mode: directive.mode,
+                    prompt: directive.prompt,
+                    project: project
+                ),
+                priorAgentResult: AssistantAgentResultContext(
+                    providerID: ProviderID(rawValue: "local-skill"),
+                    providerName: worker.displayName,
+                    mode: directive.mode,
+                    project: project,
+                    summary: response.bubbleText,
+                    detailsMarkdown: response.detailsMarkdown
+                ),
+                approval: AssistantApprovalContext(riskLevel: .low, approvalBehavior: .notRequired)
+            )
+            lastContextPacket = contextPacket
+            rememberAgentResult(userText: input, contextPacket: contextPacket)
+            try await speak(response.bubbleText, request: request, timing: &timing)
+            await recordTaskEvent(
+                taskID,
+                kind: .completed,
+                status: .completed,
+                turnID: request.turnID,
+                phase: "finish",
+                summary: response.bubbleText
+            ) { task in
+                task.resultSummary = response.bubbleText
+                task.resultDetailsMarkdown = response.detailsMarkdown
+            }
+            emitDiagnostic(
+                kind: .skillRunCompleted,
+                turnID: request.turnID,
+                phase: "skillRun",
+                directiveType: .runSkill,
+                outcome: AssistantTurnOutcome.completed.rawValue,
+                metadata: diagnosticMetadata(
+                    for: request,
+                    extra: [
+                        "skillID": skillID.rawValue,
+                        "toolCount": result.metadata["toolCount"] ?? "0"
+                    ]
+                )
+            )
+        } catch {
+            timing.actionFinishedAt = Date()
+            if timing.responseBrainStartedAt != nil, timing.responseBrainFinishedAt == nil {
+                timing.responseBrainFinishedAt = Date()
+            }
+            if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
+                completeMessage(actionID, text: "\(worker.displayName) cancelled.", status: .cancelled)
+                await recordTaskEvent(
+                    taskID,
+                    kind: .cancelled,
+                    status: .cancelled,
+                    turnID: request.turnID,
+                    phase: "skillRun",
+                    summary: "\(worker.displayName) was cancelled."
+                )
+                throw RocaError.cancelled
+            }
+            pendingDirectiveRetry = PendingDirectiveRetry(
+                directive: .runSkill(directive),
+                originalUserInput: input,
+                resolvedProject: project
+            )
+            let didStartFormatting = resultMessageID != nil
+            let message = didStartFormatting
+                ? Self.skillResultFormattingFailureMessage(project: project, error: error)
+                : "I couldn't inspect that locally: \(error.localizedDescription)"
+            if let resultMessageID {
+                completeMessage(resultMessageID, text: message, status: .failed)
+            } else {
+                completeMessage(actionID, text: message, status: .failed)
+            }
+            await recordTaskFailure(
+                taskID,
+                turnID: request.turnID,
+                phase: didStartFormatting ? "skillResultFormatting" : "skillRun",
+                message: message,
+                error: error
+            )
+            rememberAssistantObservation(message)
+            emitDiagnostic(
+                kind: .skillRunFailed,
+                turnID: request.turnID,
+                phase: didStartFormatting ? "skillResultFormatting" : "skillRun",
+                directiveType: .runSkill,
+                outcome: AssistantTurnOutcome.failed.rawValue,
+                metadata: diagnosticMetadata(for: request, error: error, extra: ["skillID": skillID.rawValue])
+            )
+            try await speak(message, request: request, timing: &timing, force: request.inputMode == .voice)
         }
     }
 
@@ -1468,6 +1909,20 @@ public actor DefaultAssistantSessionOrchestrator {
         timing.actionStartedAt = Date()
         do {
             let runID = AgentRunID.make()
+            let workflowKind = Self.developerWorkflowKind(for: input, directive: directive)
+            var providerRunMetadata = [
+                "agentRunID": runID.rawValue,
+                "agentMode": directive.mode.rawValue
+            ]
+            if let workflowKind {
+                providerRunMetadata["workflowKind"] = workflowKind.rawValue
+            }
+            var agentRequestMetadata = resolvedProject.project.map {
+                ["projectID": $0.id.rawValue, "projectName": $0.displayName]
+            } ?? [:]
+            if let workflowKind {
+                agentRequestMetadata["workflowKind"] = workflowKind.rawValue
+            }
             activeAgentProvider = provider
             activeAgentRunID = runID
             await recordTaskEvent(
@@ -1477,10 +1932,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 turnID: request.turnID,
                 phase: "agentRun",
                 summary: "\(providerName) started.",
-                metadata: [
-                    "agentRunID": runID.rawValue,
-                    "agentMode": directive.mode.rawValue
-                ]
+                metadata: providerRunMetadata
             ) { task in
                 task.providerRunID = runID
                 task.resolvedProject = resolvedProject.project
@@ -1493,7 +1945,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 workspacePath: resolvedProject.project?.localPath,
                 dataScopes: [.prompt],
                 actionScopes: [],
-                metadata: resolvedProject.project.map { ["projectID": $0.id.rawValue, "projectName": $0.displayName] } ?? [:]
+                metadata: agentRequestMetadata
             )
             emitDiagnostic(
                 kind: .agentRunStarted,
@@ -1506,7 +1958,7 @@ public actor DefaultAssistantSessionOrchestrator {
                     extra: [
                         "agentMode": directive.mode.rawValue,
                         "workspaceResolved": resolvedProject.project == nil ? "false" : "true"
-                    ]
+                    ].merging(workflowKind.map { ["workflowKind": $0.rawValue] } ?? [:]) { current, _ in current }
                 )
             )
             let events = try await provider.start(agentRunRequest)
@@ -1780,6 +2232,11 @@ public actor DefaultAssistantSessionOrchestrator {
                 throw error
             }
             let message = "I couldn't finish that with \(providerName): \(error.localizedDescription)"
+            pendingDirectiveRetry = PendingDirectiveRetry(
+                directive: .runAgent(directive),
+                originalUserInput: input,
+                resolvedProject: resolvedProject.project
+            )
             await recordTaskFailure(
                 taskID,
                 turnID: request.turnID,
@@ -1914,6 +2371,125 @@ public actor DefaultAssistantSessionOrchestrator {
                 taskID: taskID,
                 timing: &timing
             )
+        }
+    }
+
+    private func resolveProjectForSkill(
+        directive: SkillDirectiveRequest,
+        skillID: SkillID,
+        skillName: String,
+        userInput: String,
+        request: AssistantSessionTurnRequest,
+        taskID: AssistantTaskID,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws -> (project: ProjectIdentity?, shouldContinue: Bool) {
+        guard let projectName = directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !projectName.isEmpty
+        else {
+            return (nil, false)
+        }
+        await recordTaskEvent(
+            taskID,
+            kind: .projectResolutionStarted,
+            status: .resolvingProject,
+            turnID: request.turnID,
+            phase: "projectLookup",
+            summary: "Resolving \(projectName)."
+        ) { task in
+            task.projectQuery = projectName
+        }
+
+        let excludedProjectNames = Self.excludedProjectNames(from: userInput)
+        let localResolution = try await workspaceResolver.resolveLocal(
+            query: projectName,
+            shouldVerifyBroadMatchWithProvider: false,
+            excluding: excludedProjectNames
+        )
+        try checkTurnStillActive(request.turnID)
+        switch localResolution {
+        case .resolved(let project):
+            await recordTaskEvent(
+                taskID,
+                kind: .projectResolved,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                summary: "Resolved project \(project.displayName).",
+                metadata: [
+                    "projectID": project.id.rawValue,
+                    "projectPath": project.localPath
+                ]
+            ) { task in
+                task.resolvedProject = project
+            }
+            return (project, true)
+        case .ambiguous(_, let candidates):
+            let response = Self.projectClarificationResponse(for: candidates, query: projectName)
+            await recordTaskEvent(
+                taskID,
+                kind: .clarificationRequested,
+                status: .waitingForClarification,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                summary: response.conversationText,
+                metadata: ["candidateCount": String(candidates.count)]
+            )
+            let id = appendAssistantMessage(response.bubbleText, status: .completed, request: request, directiveType: .runSkill)
+            completeMessage(id, text: response.bubbleText, detailsMarkdown: response.detailsMarkdown, status: .completed)
+            storePendingProjectClarification(
+                taskID: taskID,
+                directive: AgentDirectiveRequest(
+                    providerID: nil,
+                    providerName: skillName,
+                    projectName: directive.projectName,
+                    prompt: directive.prompt,
+                    mode: directive.mode
+                ),
+                localSkillID: skillID,
+                originalUserInput: userInput,
+                query: projectName,
+                candidates: candidates,
+                questionMessageID: id,
+                request: request
+            )
+            rememberAssistantObservation(response.bubbleText)
+            try await speak(response.bubbleText, request: request, timing: &timing)
+            return (nil, false)
+        case .needsProviderDiscovery(let broadLocalMatch):
+            let message: String
+            if let broadLocalMatch {
+                message = "I only know \(broadLocalMatch.displayName) for \(projectName). Please name the project more exactly before I inspect it locally."
+            } else {
+                message = "I don't know the \(projectName) project folder yet. Please give me the local folder before I inspect it."
+            }
+            await recordTaskEvent(
+                taskID,
+                kind: .clarificationRequested,
+                status: .waitingForClarification,
+                turnID: request.turnID,
+                phase: "projectLookup",
+                summary: message
+            )
+            let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runSkill)
+            completeMessage(id, text: message, status: .completed)
+            storePendingProjectClarification(
+                taskID: taskID,
+                directive: AgentDirectiveRequest(
+                    providerID: nil,
+                    providerName: skillName,
+                    projectName: directive.projectName,
+                    prompt: directive.prompt,
+                    mode: directive.mode
+                ),
+                localSkillID: skillID,
+                originalUserInput: userInput,
+                query: projectName,
+                candidates: broadLocalMatch.map { [$0] } ?? [],
+                questionMessageID: id,
+                request: request
+            )
+            rememberAssistantObservation(message)
+            try await speak(message, request: request, timing: &timing)
+            return (nil, false)
         }
     }
 
@@ -2146,6 +2722,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private func storePendingProjectClarification(
         taskID: AssistantTaskID,
         directive: AgentDirectiveRequest,
+        localSkillID: SkillID? = nil,
         originalUserInput: String,
         query: String,
         candidates: [ProjectIdentity],
@@ -2158,8 +2735,9 @@ public actor DefaultAssistantSessionOrchestrator {
             originalUserInput: originalUserInput,
             query: query,
             candidates: candidates,
+            localSkillID: localSkillID,
             providerID: directive.resolvedProviderID,
-            providerName: directive.providerDisplayName,
+            providerName: localSkillID.flatMap(SkillDirectiveRequest.skillDisplayName(for:)) ?? directive.providerDisplayName,
             createdTurnID: request.turnID,
             questionMessageID: questionMessageID
         )
@@ -2172,13 +2750,13 @@ public actor DefaultAssistantSessionOrchestrator {
         if let explicitProjectName = Self.explicitProjectName(from: userInput) {
             var contextualized = directive
             contextualized.projectName = explicitProjectName
-            return contextualized
+            return Self.developerWorkflowDirective(contextualized, userInput: userInput)
         }
 
         guard let agentContext = lastContextPacket?.priorAgentResult,
               Self.shouldReusePriorAgentContext(for: userInput, directive: directive)
         else {
-            return directive
+            return Self.developerWorkflowDirective(directive, userInput: userInput)
         }
 
         var contextualized = directive
@@ -2195,7 +2773,103 @@ public actor DefaultAssistantSessionOrchestrator {
             contextualized.projectName = project.displayName
         }
 
-        return contextualized
+        return Self.developerWorkflowDirective(contextualized, userInput: userInput)
+    }
+
+    private func contextualizedSkillDirective(
+        _ directive: SkillDirectiveRequest,
+        userInput: String
+    ) -> SkillDirectiveRequest {
+        var contextualized = directive
+        if let explicitProjectName = Self.explicitProjectName(from: userInput) {
+            contextualized.projectName = explicitProjectName
+            return Self.developerWorkflowSkillDirective(contextualized, userInput: userInput)
+        }
+
+        if contextualized.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+           let priorResult = lastContextPacket?.priorAgentResult,
+           priorResult.providerID.rawValue == "local-skill",
+           priorResult.providerName == directive.skillDisplayName,
+           let project = priorResult.project,
+           Self.shouldReusePriorSkillContext(for: userInput, directive: directive) {
+            contextualized.projectName = project.displayName
+        }
+        return Self.developerWorkflowSkillDirective(contextualized, userInput: userInput)
+    }
+
+    private func recoveredLocalSkillFollowUpDirective(
+        from directive: AssistantDirective,
+        input: String
+    ) -> AssistantDirective {
+        guard let currentTask = lastContextPacket?.currentTask,
+              currentTask.providerID.rawValue == "local-skill",
+              SkillDirectiveRequest.skillID(for: currentTask.providerName)?.rawValue == "codebase"
+        else {
+            return directive
+        }
+
+        if Self.canRecoverLocalSkillFollowUp(from: directive),
+           let explicitProjectName = Self.explicitProjectName(from: input) {
+            return .runSkill(
+                SkillDirectiveRequest(
+                    skillID: SkillID(rawValue: "codebase"),
+                    projectName: explicitProjectName,
+                    prompt: currentTask.prompt,
+                    mode: currentTask.mode == .act ? .ask : currentTask.mode
+                )
+            )
+        }
+
+        guard Self.isLocalCodebaseFollowUp(input),
+              let project = currentTask.project,
+              Self.canRecoverLocalSkillFollowUp(from: directive)
+        else {
+            return directive
+        }
+
+        return .runSkill(
+            SkillDirectiveRequest(
+                skillID: SkillID(rawValue: "codebase"),
+                projectName: project.displayName,
+                prompt: Self.localSkillFollowUpPrompt(priorPrompt: currentTask.prompt, input: input),
+                mode: currentTask.mode == .act ? .ask : currentTask.mode
+            )
+        )
+    }
+
+    private nonisolated static func canRecoverLocalSkillFollowUp(from directive: AssistantDirective) -> Bool {
+        switch directive {
+        case .respond, .unsupported:
+            true
+        case .openApplication, .quitApplication, .insertText, .readSelection, .runAgent, .runSkill:
+            false
+        }
+    }
+
+    private nonisolated static func localSkillFollowUpPrompt(priorPrompt: String, input: String) -> String {
+        """
+        \(priorPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        Follow-up question:
+        \(input.trimmingCharacters(in: .whitespacesAndNewlines))
+        """
+    }
+
+    private nonisolated static func skillDirective(
+        fromProviderlessAgentDirective directive: AgentDirectiveRequest,
+        userInput: String
+    ) -> SkillDirectiveRequest? {
+        guard directive.resolvedProviderID == nil,
+              developerWorkflowKind(for: userInput, directive: directive) != nil
+        else {
+            return nil
+        }
+        return SkillDirectiveRequest(
+            skillID: SkillID(rawValue: "codebase"),
+            projectName: directive.projectName,
+            prompt: directive.prompt,
+            mode: directive.mode
+        )
     }
 
     private static func projectClarificationQuestion(for candidates: [ProjectIdentity]) -> String {
@@ -2576,6 +3250,25 @@ public actor DefaultAssistantSessionOrchestrator {
         return task.id
     }
 
+    private func createSkillTask(
+        directive: SkillDirectiveRequest,
+        input: String,
+        request: AssistantSessionTurnRequest,
+        skillID: SkillID
+    ) async -> AssistantTaskID {
+        let record = AssistantTaskRecord(
+            turnID: request.turnID,
+            userRequest: input,
+            capabilityID: CapabilityID(rawValue: "skill:\(skillID.rawValue)"),
+            providerName: directive.skillDisplayName,
+            mode: directive.mode,
+            projectQuery: directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            diagnosticCorrelationID: request.turnID.rawValue
+        )
+        let task = await taskLedger.createTask(record)
+        return task.id
+    }
+
     private func recordTaskEvent(
         _ taskID: AssistantTaskID?,
         kind: AssistantTaskEventKind,
@@ -2793,6 +3486,30 @@ public actor DefaultAssistantSessionOrchestrator {
         messages[index].detailsMarkdown = detailsMarkdown
         messages[index].status = status
         publishMessages()
+    }
+
+    @discardableResult
+    private func completeUnfinishedAssistantMessages(
+        turnID: BrainRequestID,
+        text: String,
+        detailsMarkdown: String? = nil,
+        status: ChatMessageStatus
+    ) -> Bool {
+        var changed = false
+        for index in messages.indices
+        where messages[index].turnID == turnID
+            && messages[index].role == .assistant
+            && messages[index].status != .completed
+            && messages[index].status != .cancelled {
+            messages[index].text = text
+            messages[index].detailsMarkdown = detailsMarkdown
+            messages[index].status = status
+            changed = true
+        }
+        if changed {
+            publishMessages()
+        }
+        return changed
     }
 
     private func removeMessage(_ id: ChatMessageID) {
@@ -3061,6 +3778,79 @@ public actor DefaultAssistantSessionOrchestrator {
         return nil
     }
 
+    private nonisolated static func skillResultFormattingFailureMessage(project: ProjectIdentity, error: Error) -> String {
+        if let recoveryMessage = brainRecoveryMessage(for: error, phase: .response) {
+            return "I inspected \(project.displayName), but \(recoveryMessage)"
+        }
+        return "I inspected \(project.displayName), but I couldn't summarize the result: \(error.localizedDescription)"
+    }
+
+    private nonisolated static func isRetryRequest(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        guard !normalized.isEmpty else {
+            return false
+        }
+        return [
+            "try again",
+            "please try again",
+            "can you try again",
+            "could you try again",
+            "mind trying again",
+            "retry",
+            "retry that",
+            "run it again",
+            "do it again",
+            "try that again",
+            "rerun it",
+            "rerun that"
+        ].contains(normalized)
+            || normalized.hasSuffix("try again")
+            || normalized.contains("try that again")
+            || normalized.contains("run that again")
+            || normalized.contains("rerun that")
+    }
+
+    private nonisolated static func isLocalCodebaseFollowUp(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        guard !normalized.isEmpty,
+              !normalized.contains("codex"),
+              !normalized.contains("claude"),
+              !normalized.contains("cursor")
+        else {
+            return false
+        }
+
+        let codebaseTerms = [
+            "any javascript",
+            "javascript",
+            "typescript",
+            "node",
+            "nodejs",
+            "cdk",
+            "infra",
+            "infrastructure",
+            "deployment",
+            "docker",
+            "go",
+            "python",
+            "swift",
+            "rust",
+            "language",
+            "languages",
+            "framework",
+            "frameworks",
+            "package json",
+            "go mod",
+            "where is",
+            "where does",
+            "what files",
+            "which files",
+            "entry point",
+            "entry points"
+        ]
+        return codebaseTerms.contains { normalized.contains($0) }
+    }
+
     private nonisolated static func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError {
             return true
@@ -3174,6 +3964,8 @@ public actor DefaultAssistantSessionOrchestrator {
             "that repo",
             "that file",
             "those files",
+            "what about",
+            "its ",
             "in it",
             "for it",
             "follow up",
@@ -3181,8 +3973,221 @@ public actor DefaultAssistantSessionOrchestrator {
         ].contains { normalized.contains($0) }
     }
 
+    private nonisolated static func shouldReusePriorSkillContext(
+        for input: String,
+        directive: SkillDirectiveRequest
+    ) -> Bool {
+        guard directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+              explicitProjectName(from: input) == nil
+        else {
+            return false
+        }
+        if directive.mode != .ask {
+            return true
+        }
+        let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return [
+            "there",
+            "same project",
+            "same repo",
+            "same codebase",
+            "that project",
+            "that repo",
+            "that file",
+            "those files",
+            "what about",
+            "its ",
+            "in it",
+            "for it",
+            "follow up",
+            "continue"
+        ].contains { normalized.contains($0) }
+    }
+
+    private enum DeveloperWorkflowKind: String, Sendable {
+        case architectureSummary
+        case behaviorLocation
+        case implementationPlan
+        case diffReview
+
+        var promptTitle: String {
+            switch self {
+            case .architectureSummary:
+                "architecture summary"
+            case .behaviorLocation:
+                "behavior location"
+            case .implementationPlan:
+                "implementation plan"
+            case .diffReview:
+                "diff review"
+            }
+        }
+
+        var prefersPlanMode: Bool {
+            switch self {
+            case .implementationPlan:
+                true
+            case .architectureSummary, .behaviorLocation, .diffReview:
+                false
+            }
+        }
+
+        var instruction: String {
+            switch self {
+            case .architectureSummary:
+                "Summarize the architecture and important entry points."
+            case .behaviorLocation:
+                "Answer where the behavior lives with relevant paths, symbols, and a short flow explanation."
+            case .implementationPlan:
+                "Draft a concise implementation plan with meaningful tradeoffs, risks, and test notes."
+            case .diffReview:
+                "Review the current diff or described changes; prioritize bugs, regressions, unclear behavior, and missing tests."
+            }
+        }
+    }
+
+    private nonisolated static func developerWorkflowDirective(
+        _ directive: AgentDirectiveRequest,
+        userInput: String
+    ) -> AgentDirectiveRequest {
+        guard let workflowKind = developerWorkflowKind(for: userInput, directive: directive) else {
+            return directive
+        }
+
+        var updated = directive
+        if updated.mode == .ask, workflowKind.prefersPlanMode {
+            updated.mode = .plan
+        }
+        updated.prompt = developerWorkflowPrompt(
+            kind: workflowKind,
+            userInput: userInput,
+            agentPrompt: updated.prompt
+        )
+        return updated
+    }
+
+    private nonisolated static func developerWorkflowSkillDirective(
+        _ directive: SkillDirectiveRequest,
+        userInput: String
+    ) -> SkillDirectiveRequest {
+        guard let workflowKind = developerWorkflowKind(for: userInput, directive: directive) else {
+            return directive
+        }
+
+        var updated = directive
+        if updated.mode == .ask, workflowKind.prefersPlanMode {
+            updated.mode = .plan
+        }
+        updated.prompt = developerWorkflowPrompt(
+            kind: workflowKind,
+            userInput: userInput,
+            agentPrompt: updated.prompt
+        )
+        return updated
+    }
+
+    private nonisolated static func developerWorkflowKind(
+        for userInput: String,
+        directive: AgentDirectiveRequest
+    ) -> DeveloperWorkflowKind? {
+        developerWorkflowKind(
+            for: userInput,
+            projectName: directive.projectName,
+            prompt: directive.prompt,
+            mode: directive.mode
+        )
+    }
+
+    private nonisolated static func developerWorkflowKind(
+        for userInput: String,
+        directive: SkillDirectiveRequest
+    ) -> DeveloperWorkflowKind? {
+        developerWorkflowKind(
+            for: userInput,
+            projectName: directive.projectName,
+            prompt: directive.prompt,
+            mode: directive.mode
+        )
+    }
+
+    private nonisolated static func developerWorkflowKind(
+        for userInput: String,
+        projectName: String?,
+        prompt: String,
+        mode: AgentMode
+    ) -> DeveloperWorkflowKind? {
+        guard mode != .act,
+              projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            return nil
+        }
+
+        let text = ProjectIdentityResolver.normalizedKey([userInput, prompt].joined(separator: " "))
+        if text.contains("implementation plan")
+            || text.contains("implementation options")
+            || text.contains("draft a plan")
+            || text.contains("make a plan")
+            || text.contains("plan for")
+            || text.contains("tradeoff")
+            || text.contains("trade off") {
+            return .implementationPlan
+        }
+        if text.contains("review the diff")
+            || text.contains("review diff")
+            || text.contains("diff review")
+            || text.contains("review my changes")
+            || text.contains("review the changes") {
+            return .diffReview
+        }
+        if text.contains("where does") && (text.contains("live") || text.contains("implemented") || text.contains("happen")) {
+            return .behaviorLocation
+        }
+        if text.contains("where is") && (text.contains("implemented") || text.contains("handled") || text.contains("defined")) {
+            return .behaviorLocation
+        }
+        if text.contains("architecture")
+            || text.contains("entry point")
+            || text.contains("entry points")
+            || text.contains("codebase overview")
+            || text.contains("repo overview")
+            || text.contains("project overview") {
+            return .architectureSummary
+        }
+        return nil
+    }
+
+    private nonisolated static func developerWorkflowPrompt(
+        kind: DeveloperWorkflowKind,
+        userInput: String,
+        agentPrompt: String
+    ) -> String {
+        let trimmedPrompt = agentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.hasPrefix("Roca developer workflow:") else {
+            return trimmedPrompt
+        }
+        let trimmedUserInput = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        return """
+        Roca developer workflow: \(kind.promptTitle)
+
+        User request:
+        \(trimmedUserInput)
+
+        Agent task:
+        \(trimmedPrompt)
+
+        Requirements:
+        - Inspect only the resolved workspace/project for this request.
+        - \(kind.instruction)
+        - Prefer file paths, symbols, and short rationale over pasted file contents.
+        - Do not paste raw file contents, long command output, or tool progress unless the user explicitly asks.
+        - Do not make code changes.
+        """
+    }
+
     private nonisolated static func explicitProjectName(from input: String) -> String? {
         let patterns = [
+            #"\b(?:and\s+)?(?:what\s+about|how\s+about)(?:\s+for)?\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*[-_][A-Za-z0-9._-]*)\b"#,
+            #"\b(?:what\s+about|how\s+about)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#,
             #"\b(?:other|another)\s+([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#,
             #"\b(?:in|for|from|inside|within)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#,
             #"\b(?:the\s+)?([A-Za-z0-9][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\s+(?:project|repo|repository|codebase)\b"#
@@ -3234,7 +4239,7 @@ public actor DefaultAssistantSessionOrchestrator {
 
     private nonisolated static func cleanProjectPhrase(_ phrase: String) -> String? {
         var words = phrase.split(separator: " ").map(String.init)
-        let contextualWords = Set(["current", "same", "that", "this", "the", "a", "an", "different", "other", "another"])
+        let contextualWords = Set(["current", "same", "that", "this", "the", "a", "an", "different", "other", "another", "about"])
         while let first = words.first,
               contextualWords.contains(ProjectIdentityResolver.normalizedKey(first)) {
             words.removeFirst()
@@ -3324,6 +4329,41 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
+    private nonisolated static func skillIntroText(
+        skillName: String,
+        project: ProjectIdentity,
+        mode: AgentMode,
+        userInput: String,
+        prompt: String
+    ) -> String {
+        let text = ProjectIdentityResolver.normalizedKey([userInput, prompt].joined(separator: " "))
+        switch mode {
+        case .ask:
+            if text.contains("no i mean")
+                || text.contains("actually")
+                || text.contains("infra")
+                || text.contains("infrastructure")
+                || text.contains("deployment")
+                || text.contains("cdk") {
+                return "Got it, I'll look specifically at \(project.displayName)'s infrastructure code."
+            }
+            if text.contains("what about") {
+                return "I'll narrow that down in \(project.displayName)."
+            }
+            if text.contains("what language")
+                || text.contains("which language")
+                || text.contains("written in")
+                || text.contains("languages") {
+                return "I'll check \(project.displayName)'s languages and project structure."
+            }
+            return "I'll inspect \(project.displayName) locally."
+        case .plan:
+            return "I'll inspect \(project.displayName) locally and draft a concise plan."
+        case .act:
+            return "\(skillName) is read-only for now."
+        }
+    }
+
     private nonisolated static func speechText(from text: String) -> String {
         let filtered = text.unicodeScalars.filter { !isSpeechEmojiScalar($0) }
         return String(String.UnicodeScalarView(filtered))
@@ -3371,7 +4411,42 @@ public actor DefaultAssistantSessionOrchestrator {
         Return Roca's final response as JSON using the required bubbleText/detailsMarkdown shape.
         Keep bubbleText short, conversational, and suitable for speech.
         Put tables, endpoints, long lists, and implementation details in detailsMarkdown.
+        For codebase workflow answers, prefer paths, symbols, and compact rationale over raw file contents.
         Do not include raw tool progress, shell commands, or narration about how \(providerName) searched unless it is essential to the answer.
+        """
+    }
+
+    private nonisolated static func skillResultFormattingPrompt(
+        userInput: String,
+        skillName: String,
+        project: ProjectIdentity,
+        localEvidence: String
+    ) -> String {
+        """
+        The user asked Roca to inspect a local project using \(skillName).
+
+        User request:
+        \(userInput)
+
+        Project:
+        \(project.displayName) at \(project.localPath)
+
+        Local evidence gathered by Roca:
+        \(localEvidence)
+
+        Return Roca's final response as JSON using the required bubbleText/detailsMarkdown shape.
+        Keep bubbleText short, conversational, and suitable for speech.
+        Put paths, entry points, diff-review findings, implementation details, and evidence in detailsMarkdown.
+        For language inventory requests, include the primary language and notable secondary languages from the repository map and manifests.
+        Do not say JavaScript, TypeScript, Node, or CDK are absent if the evidence shows matching files or manifests.
+        Prefer concise path and symbol references over raw file contents.
+        Treat the local evidence as an evidence packet, not a complete omniscient view of the repo.
+        Answer only from the repository map, search results, diff, and targeted file snippets provided.
+        Cite concrete paths when making claims about languages, frameworks, files, entry points, or deployment infrastructure.
+        Do not claim something is absent unless the evidence contract says the relevant paths or file types were scanned.
+        If the user's correction narrows the scope, acknowledge the corrected scope and answer that scope directly.
+        Do not mention hidden tool names unless useful to the answer.
+        Do not claim code was changed.
         """
     }
 
@@ -3478,10 +4553,26 @@ private struct PendingProjectClarification: Sendable {
     var originalUserInput: String
     var query: String
     var candidates: [ProjectIdentity]
+    var localSkillID: SkillID?
     var providerID: ProviderID?
     var providerName: String
     var createdTurnID: BrainRequestID
     var questionMessageID: ChatMessageID
+
+    var directiveType: AssistantDirectiveType {
+        localSkillID == nil ? .runAgent : .runSkill
+    }
+}
+
+private struct PendingDirectiveRetry: Sendable {
+    var directive: AssistantDirective
+    var originalUserInput: String
+    var resolvedProject: ProjectIdentity?
+    var createdAt = Date()
+
+    var isFresh: Bool {
+        Date().timeIntervalSince(createdAt) <= 10 * 60
+    }
 }
 
 private extension AssistantDirective {
@@ -3499,6 +4590,8 @@ private extension AssistantDirective {
             .readSelection
         case .runAgent:
             .runAgent
+        case .runSkill:
+            .runSkill
         case .unsupported:
             .unsupported
         }

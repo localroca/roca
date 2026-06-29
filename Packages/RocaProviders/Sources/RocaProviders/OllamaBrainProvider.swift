@@ -30,6 +30,7 @@ public struct OllamaModel: Codable, Equatable, Identifiable, Sendable {
 
 public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
     public static let requestTimeoutSecondsMetadataKey = "requestTimeoutSeconds"
+    public static let maxAutomaticContextWindow = 32_768
 
     public let id = BuiltInProviderIDs.ollamaBrain
     public let displayName = "Ollama"
@@ -67,12 +68,13 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
         }
 
         let wantsJSON = request.metadata["responseFormat"] == "json"
+        let baseTimeout = Self.timeoutInterval(from: request.metadata, wantsJSON: wantsJSON)
         let urlRequest = try chatRequest(
             modelID: modelID,
             messages: request.messages,
             stream: false,
             wantsJSON: wantsJSON,
-            timeoutInterval: Self.timeoutInterval(from: request.metadata, wantsJSON: wantsJSON)
+            timeoutInterval: baseTimeout
         )
 
         return AsyncThrowingStream { continuation in
@@ -80,22 +82,14 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
                 defer { self.clearTask(request.requestID) }
                 do {
                     continuation.yield(.started(requestID: request.requestID, providerID: self.id))
-                    let (data, response) = try await self.session.data(for: urlRequest)
-                    try Self.validate(response)
-                    let body = try self.decoder.decode(OllamaChatResponse.self, from: data)
-                    if let error = body.error {
-                        throw RocaError.providerUnavailable(ProviderID(rawValue: "ollama: \(error)"))
-                    }
-                    let text = body.message?.content ?? ""
-                    continuation.yield(
-                        .final(
-                            BrainResponse(
-                                text: text.trimmingCharacters(in: .whitespacesAndNewlines),
-                                usedProvider: self.id,
-                                metadata: ["model": modelID]
-                            )
-                        )
+                    let response = try await self.completeChat(
+                        urlRequest,
+                        modelID: modelID,
+                        messages: request.messages,
+                        wantsJSON: wantsJSON,
+                        baseTimeout: baseTimeout
                     )
+                    continuation.yield(.final(response))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: Self.mappedCompletionError(error, providerID: self.id, modelID: modelID))
@@ -121,7 +115,7 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
         request.httpMethod = "GET"
         request.timeoutInterval = 2
         let (data, response) = try await session.data(for: request)
-        try Self.validate(response)
+        try Self.validate(response, data: data)
         let tags = try decoder.decode(OllamaTagsResponse.self, from: data)
         return tags.models.map { model in
             OllamaModel(name: model.name, displayName: model.name, size: model.size)
@@ -154,7 +148,8 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
         messages: [BrainMessage],
         stream: Bool,
         wantsJSON: Bool,
-        timeoutInterval: TimeInterval
+        timeoutInterval: TimeInterval,
+        contextWindow: Int? = nil
     ) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
@@ -164,10 +159,68 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
             model: modelID,
             messages: messages.map { OllamaChatMessage(role: $0.role.rawValue, content: $0.content) },
             stream: stream,
-            format: wantsJSON ? "json" : nil
+            format: wantsJSON ? "json" : nil,
+            options: contextWindow.map { OllamaChatOptions(numContext: $0) }
         )
         request.httpBody = try encoder.encode(body)
         return request
+    }
+
+    private func completeChat(
+        _ request: URLRequest,
+        modelID: String,
+        messages: [BrainMessage],
+        wantsJSON: Bool,
+        baseTimeout: TimeInterval
+    ) async throws -> BrainResponse {
+        do {
+            return try await performChat(request, modelID: modelID, metadata: ["model": modelID])
+        } catch let overflow as OllamaContextOverflowError {
+            guard let contextWindow = Self.retryContextWindow(for: overflow) else {
+                throw overflow
+            }
+            let retryRequest = try chatRequest(
+                modelID: modelID,
+                messages: messages,
+                stream: false,
+                wantsJSON: wantsJSON,
+                timeoutInterval: max(baseTimeout, 300),
+                contextWindow: contextWindow
+            )
+            return try await performChat(
+                retryRequest,
+                modelID: modelID,
+                metadata: [
+                    "model": modelID,
+                    "ollamaContextRetry": "true",
+                    "ollamaPromptTokens": String(overflow.promptTokens),
+                    "ollamaInitialContextWindow": String(overflow.contextWindow),
+                    "ollamaRetriedContextWindow": String(contextWindow)
+                ]
+            )
+        }
+    }
+
+    private func performChat(
+        _ request: URLRequest,
+        modelID: String,
+        metadata: [String: String]
+    ) async throws -> BrainResponse {
+        let (data, response) = try await session.data(for: request)
+        try Self.validate(response, data: data)
+        let body = try decoder.decode(OllamaChatResponse.self, from: data)
+        if let error = body.error {
+            if let overflow = Self.contextOverflow(from: error) {
+                throw overflow
+            }
+            throw RocaError.providerUnavailable(ProviderID(rawValue: "ollama: \(error)"))
+        }
+        let text = body.message?.content ?? ""
+        return BrainResponse(
+            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            usedProvider: id,
+            metadata: metadata
+        )
     }
 
     private static func timeoutInterval(from metadata: [String: String], wantsJSON: Bool) -> TimeInterval {
@@ -180,22 +233,82 @@ public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
         return wantsJSON ? 20 : 300
     }
 
+    private static func retryContextWindow(for error: OllamaContextOverflowError) -> Int? {
+        let reserve = 2_048
+        let needed = error.promptTokens + reserve
+        let candidates = [8_192, 16_384, maxAutomaticContextWindow]
+        return candidates.first { $0 > error.contextWindow && $0 >= needed }
+    }
+
     private static func mappedCompletionError(_ error: Error, providerID: ProviderID, modelID: String) -> Error {
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain,
            nsError.code == NSURLErrorTimedOut {
             return RocaError.providerTimedOut(providerID: providerID, modelID: modelID)
         }
+        if let error = error as? OllamaHTTPError {
+            return RocaError.providerUnavailable(ProviderID(rawValue: "ollama:http-\(error.statusCode)"))
+        }
+        if let error = error as? OllamaContextOverflowError {
+            return RocaError.providerUnavailable(
+                ProviderID(rawValue: "ollama:context-\(error.promptTokens)-over-\(error.contextWindow)")
+            )
+        }
         return error
     }
 
-    private static func validate(_ response: URLResponse) throws {
+    private static func validate(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             return
         }
         guard (200 ..< 300).contains(http.statusCode) else {
-            throw RocaError.providerUnavailable(ProviderID(rawValue: "ollama:http-\(http.statusCode)"))
+            if let error = ollamaErrorMessage(from: data),
+               let overflow = contextOverflow(from: error) {
+                throw overflow
+            }
+            throw OllamaHTTPError(statusCode: http.statusCode)
         }
+    }
+
+    private static func ollamaErrorMessage(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawError = object["error"] else {
+            return nil
+        }
+        if let error = rawError as? String {
+            return error
+        }
+        if let nested = rawError as? [String: Any],
+           let message = nested["message"] as? String {
+            return message
+        }
+        return nil
+    }
+
+    private static func contextOverflow(from error: String) -> OllamaContextOverflowError? {
+        let message: String
+        if let data = error.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let nestedError = object["error"] as? [String: Any],
+           let nestedMessage = nestedError["message"] as? String {
+            message = nestedMessage
+            let promptTokens = nestedError["n_prompt_tokens"] as? Int
+            let contextWindow = nestedError["n_ctx"] as? Int
+            if let promptTokens, let contextWindow {
+                return OllamaContextOverflowError(promptTokens: promptTokens, contextWindow: contextWindow)
+            }
+        } else {
+            message = error
+        }
+
+        guard message.localizedCaseInsensitiveContains("exceeds the available context size") else {
+            return nil
+        }
+        let numbers = message.matches(of: /\d+/).compactMap { Int($0.output) }
+        guard numbers.count >= 2 else {
+            return nil
+        }
+        return OllamaContextOverflowError(promptTokens: numbers[0], contextWindow: numbers[1])
     }
 
     private static func installedOllamaAppURL(fileManager: FileManager) -> URL? {
@@ -236,6 +349,15 @@ private struct OllamaChatRequest: Encodable {
     var messages: [OllamaChatMessage]
     var stream: Bool
     var format: String?
+    var options: OllamaChatOptions?
+}
+
+private struct OllamaChatOptions: Encodable {
+    var numContext: Int
+
+    enum CodingKeys: String, CodingKey {
+        case numContext = "num_ctx"
+    }
 }
 
 private struct OllamaChatMessage: Codable {
@@ -247,6 +369,15 @@ private struct OllamaChatResponse: Decodable {
     var message: OllamaChatMessage?
     var done: Bool?
     var error: String?
+}
+
+private struct OllamaHTTPError: Error {
+    var statusCode: Int
+}
+
+private struct OllamaContextOverflowError: Error {
+    var promptTokens: Int
+    var contextWindow: Int
 }
 
 private extension NSLock {

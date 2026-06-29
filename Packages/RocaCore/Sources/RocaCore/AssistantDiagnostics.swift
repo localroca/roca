@@ -11,6 +11,9 @@ public enum AssistantDiagnosticEventKind: String, Codable, Sendable {
     case agentProjectLookupCompleted
     case agentProjectLookupFailed
     case agentProviderDiagnostic
+    case skillRunStarted
+    case skillRunCompleted
+    case skillRunFailed
     case agentRunStarted
     case agentRunCompleted
     case agentRunFailed

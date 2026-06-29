@@ -295,6 +295,8 @@ public struct EvalRunner: Sendable {
             return .wouldReadSelection
         case .runAgent:
             return .wouldRunAgent
+        case .runSkill:
+            return .wouldRunSkill
         case .unsupported:
             return .wouldRefuseUnsupported
         }
@@ -444,6 +446,8 @@ private extension AssistantDirective {
             .readSelection
         case .runAgent:
             .runAgent
+        case .runSkill:
+            .runSkill
         case .unsupported:
             .unsupported
         }
@@ -499,11 +503,17 @@ private extension AssistantDirective {
         if case .runAgent(let request) = self {
             return request.projectName
         }
+        if case .runSkill(let request) = self {
+            return request.projectName
+        }
         return nil
     }
 
     var agentMode: AgentMode? {
         if case .runAgent(let request) = self {
+            return request.mode
+        }
+        if case .runSkill(let request) = self {
             return request.mode
         }
         return nil

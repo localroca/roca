@@ -73,6 +73,269 @@
       ]
     },
     {
+      "id": "developer_workflow_architecture_summary",
+      "title": "Developer workflow architecture summary",
+      "description": "An explicit providerless repo architecture request should use Roca's local Codebase Skill and return a concise Roca summary with details.",
+      "tags": ["skill", "codebase", "developer-workflow", "issue-8"],
+      "projects": [
+        {
+          "id": "roca",
+          "displayName": "Roca",
+          "aliases": ["roca"],
+          "localPath": "/workspace/roca"
+        }
+      ],
+      "localSkill": {
+        "skillID": "codebase",
+        "displayName": "Codebase Skill",
+        "evidenceMarkdown": "# Codebase Skill Evidence\n## Top-Level Files\n- RocaMac\n- Packages/RocaCore\n- Packages/RocaServices\n- Packages/RocaProviders"
+      },
+      "turns": [
+        {
+          "id": "architecture_summary",
+          "user": "In the Roca repo, summarize architecture and important entry points.",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"roca\",\"prompt\":\"summarize architecture and important entry points\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"I inspected Roca locally and found the main entry points.\",\"detailsMarkdown\":\"## Entry points\\n- RocaMac/App\\n- Packages/RocaCore\\n- Packages/RocaServices\\n- Packages/RocaProviders\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll inspect Roca locally."
+              },
+              {
+                "role": "action",
+                "text": "Local scan complete.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "I inspected Roca locally and found the main entry points.",
+                "detailsContains": "Packages/RocaServices"
+              }
+            ],
+            "spokenTexts": [
+              "I'll inspect Roca locally.",
+              "I inspected Roca locally and found the main entry points."
+            ],
+            "agentRequestCount": 0,
+            "skillRequests": [
+              {
+                "skillID": "codebase",
+                "workspacePath": "/workspace/roca",
+                "promptContains": "Roca developer workflow: architecture summary",
+                "mode": "ask"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "developer_workflow_implementation_plan",
+      "title": "Developer workflow implementation plan",
+      "description": "An explicit providerless repo implementation-plan request should use Roca's local Codebase Skill in plan mode.",
+      "tags": ["skill", "codebase", "developer-workflow", "issue-8"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "localSkill": {
+        "skillID": "codebase",
+        "displayName": "Codebase Skill",
+        "evidenceMarkdown": "# Codebase Skill Evidence\n## Search Results\n- routes/passkeys.ts\n- services/passkeyRecovery.ts\n\n## Notes\nPlan should cover tradeoffs and tests."
+      },
+      "turns": [
+        {
+          "id": "implementation_plan",
+          "user": "For the Uni Auth repo, draft an implementation plan for passkey recovery and tradeoffs.",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"uni-auth\",\"prompt\":\"draft an implementation plan for passkey recovery with tradeoffs\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"I drafted the local passkey recovery plan.\",\"detailsMarkdown\":\"## Plan\\n- Inspect passkey recovery routes.\\n- Map service boundaries.\\n- Add focused tests.\\n\\n## Tradeoffs\\n- Keep recovery small for alpha, then expand.\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll inspect Uni Auth locally and draft a concise plan."
+              },
+              {
+                "role": "action",
+                "text": "Local scan complete.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "I drafted the local passkey recovery plan.",
+                "detailsContains": "## Tradeoffs"
+              }
+            ],
+            "spokenTexts": [
+              "I'll inspect Uni Auth locally and draft a concise plan.",
+              "I drafted the local passkey recovery plan."
+            ],
+            "agentRequestCount": 0,
+            "skillRequests": [
+              {
+                "skillID": "codebase",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "Roca developer workflow: implementation plan",
+                "mode": "plan"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "codebase_nested_infra_followup",
+      "title": "Codebase nested infrastructure follow-up",
+      "description": "A local codebase conversation should keep project context, narrow to infrastructure on follow-up, and avoid generic repeated intro copy.",
+      "tags": ["skill", "codebase", "infra", "developer-workflow", "issue-8"],
+      "projects": [
+        {
+          "id": "uni-auth",
+          "displayName": "Uni Auth",
+          "aliases": ["uni-auth"],
+          "localPath": "/workspace/uni-auth"
+        }
+      ],
+      "localSkill": {
+        "skillID": "codebase",
+        "displayName": "Codebase Skill",
+        "evidenceMarkdown": "# Codebase Skill Evidence\n## Repository Map\n- go.mod (Go module)\n- infra/package.json (Node package)\n- infra/cdk.json (AWS CDK app)\n\n## Targeted File Evidence\n### `infra/package.json`\n```text\n{\"type\":\"module\",\"dependencies\":{\"aws-cdk-lib\":\"^2.0.0\"}}\n```\n\n### `infra/bin/infra.js`\n```text\nimport { App } from 'aws-cdk-lib';\n```"
+      },
+      "turns": [
+        {
+          "id": "language_inventory",
+          "user": "In the Uni Auth repo, what language is the project in?",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"uni-auth\",\"prompt\":\"what language is the project in?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Uni Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra.\",\"detailsMarkdown\":\"## Evidence\\n- `go.mod`: Go module\\n- `infra/package.json`: JavaScript/Node package\\n- `infra/cdk.json`: AWS CDK app\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll check Uni Auth's languages and project structure."
+              },
+              {
+                "role": "action",
+                "text": "Local scan complete.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "Uni Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra.",
+                "detailsContains": "infra/package.json"
+              }
+            ],
+            "spokenTexts": [
+              "I'll check Uni Auth's languages and project structure.",
+              "Uni Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra."
+            ],
+            "agentRequestCount": 0,
+            "skillRequests": [
+              {
+                "skillID": "codebase",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "what language is the project in?",
+                "mode": "ask"
+              }
+            ]
+          }
+        },
+        {
+          "id": "infra_followup",
+          "user": "What about its infrastructure code?",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"prompt\":\"inspect infrastructure code\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"The deployment infrastructure evidence points to JavaScript AWS CDK under infra.\",\"detailsMarkdown\":\"## Evidence\\n- `infra/package.json`: Node package with `aws-cdk-lib`\\n- `infra/cdk.json`: CDK app config\\n- `infra/bin/infra.js`: CDK entry point\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Got it, I'll look specifically at Uni Auth's infrastructure code."
+              },
+              {
+                "role": "action",
+                "text": "Local scan complete.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "The deployment infrastructure evidence points to JavaScript AWS CDK under infra.",
+                "detailsContains": "infra/bin/infra.js"
+              }
+            ],
+            "spokenTexts": [
+              "Got it, I'll look specifically at Uni Auth's infrastructure code.",
+              "The deployment infrastructure evidence points to JavaScript AWS CDK under infra."
+            ],
+            "agentRequestCount": 0,
+            "skillRequests": [
+              {
+                "skillID": "codebase",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "inspect infrastructure code",
+                "mode": "ask"
+              }
+            ]
+          }
+        },
+        {
+          "id": "infra_correction",
+          "user": "No I mean the deployment infra stuff. It should be in the infra folder in that repo.",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"prompt\":\"inspect deployment infra in the infra folder\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"You were right, the deployment infra evidence is JavaScript CDK in the infra folder.\",\"detailsMarkdown\":\"## Evidence\\n- `infra/package.json`: Node package\\n- `infra/cdk.json`: AWS CDK app\\n- `infra/bin/infra.js`: CDK entry point\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "Got it, I'll look specifically at Uni Auth's infrastructure code."
+              },
+              {
+                "role": "action",
+                "text": "Local scan complete.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "You were right, the deployment infra evidence is JavaScript CDK in the infra folder.",
+                "detailsContains": "infra/cdk.json"
+              }
+            ],
+            "spokenTexts": [
+              "Got it, I'll look specifically at Uni Auth's infrastructure code.",
+              "You were right, the deployment infra evidence is JavaScript CDK in the infra folder."
+            ],
+            "agentRequestCount": 0,
+            "skillRequests": [
+              {
+                "skillID": "codebase",
+                "workspacePath": "/workspace/uni-auth",
+                "promptContains": "inspect deployment infra in the infra folder",
+                "mode": "ask"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": "codex_act_intro_copy",
       "title": "Codex act intro copy",
       "description": "Edit requests should say Roca is asking Codex to make a change, not inspect the project.",

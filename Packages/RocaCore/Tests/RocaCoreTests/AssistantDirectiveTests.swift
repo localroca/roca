@@ -44,6 +44,24 @@ func assistantDirectiveEnvelopeValidatesSupportedActions() throws {
         try AssistantDirectiveEnvelope(type: .unsupported, message: "Not yet.").directive()
             == .unsupported("Not yet.")
     )
+
+    #expect(
+        try AssistantDirectiveEnvelope(
+            type: .runSkill,
+            skillID: "codebase",
+            projectName: "roca",
+            prompt: "summarize architecture",
+            mode: .ask
+        ).directive()
+            == .runSkill(
+                SkillDirectiveRequest(
+                    skillID: "codebase",
+                    projectName: "roca",
+                    prompt: "summarize architecture",
+                    mode: .ask
+                )
+            )
+    )
 }
 
 @Test
@@ -64,7 +82,26 @@ func assistantDirectiveEnvelopeRejectsMissingRequiredFields() throws {
         _ = try AssistantDirectiveEnvelope(type: .runAgent, providerID: "codex-agent").directive()
     }
 
-    #expect(throws: RocaError.selectionUnavailable("Agent directive needs a provider.")) {
-        _ = try AssistantDirectiveEnvelope(type: .runAgent, prompt: "inspect this").directive()
+    #expect(throws: RocaError.selectionUnavailable("Skill directive needs a prompt.")) {
+        _ = try AssistantDirectiveEnvelope(type: .runSkill, skillID: "codebase").directive()
     }
+
+    #expect(throws: RocaError.selectionUnavailable("Skill directive needs a skill.")) {
+        _ = try AssistantDirectiveEnvelope(type: .runSkill, prompt: "inspect this").directive()
+    }
+}
+
+@Test
+func assistantDirectiveEnvelopeAllowsAgentProviderToBeResolvedLater() throws {
+    #expect(
+        try AssistantDirectiveEnvelope(type: .runAgent, projectName: "roca", prompt: "inspect this").directive()
+            == .runAgent(
+                AgentDirectiveRequest(
+                    providerID: nil,
+                    projectName: "roca",
+                    prompt: "inspect this",
+                    mode: .ask
+                )
+            )
+    )
 }
