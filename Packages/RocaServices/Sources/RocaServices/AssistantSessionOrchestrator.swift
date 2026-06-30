@@ -31,6 +31,7 @@ public actor DefaultAssistantSessionOrchestrator {
     private let workspaceResolver: WorkspaceResolutionService
     private let localSkillWorkers: [SkillID: any LocalSkillWorking]
     private let taskLedger: any AssistantTaskLedger
+    private let contextAssembler = AssistantContextAssembler()
     private let readSelectionCommand: ReadSelectionCommand?
     private let providerSetupInstaller: any ProviderSetupInstalling
     private let companionState: CompanionStateCenter?
@@ -650,7 +651,7 @@ public actor DefaultAssistantSessionOrchestrator {
         }
         let brainRequest = BrainRequest(
             requestID: request.turnID,
-            messages: directiveMessages(input: input, context: context),
+            messages: await directiveMessages(input: input, context: context),
             role: .companionRouter,
             modelID: request.selection(for: .companionRouter).modelID,
             context: RequestContext(
@@ -1326,9 +1327,10 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
-    private func directiveMessages(input: String, context: AssistantLocalContext) -> [BrainMessage] {
+    private func directiveMessages(input: String, context: AssistantLocalContext) async -> [BrainMessage] {
         var messages = [BrainMessage(role: .system, content: AssistantPromptCatalog.directiveSystemPrompt)]
         messages.append(contentsOf: conversationMessages)
+        messages.append(contentsOf: await contextBridgeMessages())
         messages.append(
             BrainMessage(
                 role: .user,
@@ -2653,11 +2655,12 @@ public actor DefaultAssistantSessionOrchestrator {
             }
         } catch {
             completeMessage(lookupID, text: "\(providerName) project lookup failed.", status: .failed)
+            let message = "I couldn't read \(providerName)'s project list in time, so I don't know the \(projectName) project folder yet. Please give me the local folder or try again."
             await recordTaskFailure(
                 taskID,
                 turnID: request.turnID,
                 phase: "projectLookup",
-                message: "\(providerName) project lookup failed.",
+                message: message,
                 error: error
             )
             emitDiagnostic(
@@ -2669,7 +2672,6 @@ public actor DefaultAssistantSessionOrchestrator {
                 outcome: AssistantTurnOutcome.failed.rawValue,
                 metadata: diagnosticMetadata(for: request, error: error, extra: ["projectQueryPresent": "true"])
             )
-            let message = "I couldn't read \(providerName)'s project list in time, so I don't know the \(projectName) project folder yet. Please give me the local folder or try again."
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: .runAgent)
             completeMessage(id, text: message, status: .completed)
             rememberAssistantObservation(message)
@@ -2769,7 +2771,7 @@ public actor DefaultAssistantSessionOrchestrator {
             return Self.developerWorkflowDirective(contextualized, userInput: userInput)
         }
 
-        guard let agentContext = lastContextPacket?.priorAgentResult,
+        guard let agentContext = contextAssembler.priorAgentResult(from: lastContextPacket),
               Self.shouldReusePriorAgentContext(for: userInput, directive: directive)
         else {
             return Self.developerWorkflowDirective(directive, userInput: userInput)
@@ -2803,7 +2805,7 @@ public actor DefaultAssistantSessionOrchestrator {
         }
 
         if contextualized.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-           let priorResult = lastContextPacket?.priorAgentResult,
+           let priorResult = contextAssembler.priorAgentResult(from: lastContextPacket),
            priorResult.providerID.rawValue == "local-skill",
            priorResult.providerName == directive.skillDisplayName,
            let project = priorResult.project,
@@ -2817,7 +2819,7 @@ public actor DefaultAssistantSessionOrchestrator {
         from directive: AssistantDirective,
         input: String
     ) -> AssistantDirective {
-        guard let currentTask = lastContextPacket?.currentTask,
+        guard let currentTask = contextAssembler.currentTask(from: lastContextPacket),
               currentTask.providerID.rawValue == "local-skill",
               SkillDirectiveRequest.skillID(for: currentTask.providerName)?.rawValue == "codebase"
         else {
@@ -2839,7 +2841,7 @@ public actor DefaultAssistantSessionOrchestrator {
 
         let admission = AnswerAdmissionPolicy.decision(
             userInput: input,
-            priorResult: lastContextPacket?.priorAgentResult
+            priorResult: contextAssembler.priorAgentResult(from: lastContextPacket)
         )
         let admissionCanApply = admission.action == .verifyWithSkill
             && canRecover
@@ -2857,7 +2859,7 @@ public actor DefaultAssistantSessionOrchestrator {
                 "admissionAction": admission.action.rawValue,
                 "reason": admission.reason,
                 "requiredSkillID": admission.requiredSkillID?.rawValue ?? "",
-                "priorEvidenceGrade": lastContextPacket?.priorAgentResult?.evidence?.grade.rawValue ?? "none",
+                "priorEvidenceGrade": contextAssembler.priorAgentResult(from: lastContextPacket)?.evidence?.grade.rawValue ?? "none",
                 "recoverableDirective": String(canRecover)
             ]
         )
@@ -3081,6 +3083,7 @@ public actor DefaultAssistantSessionOrchestrator {
             BrainMessage(role: .system, content: AssistantPromptCatalog.responseSystemPrompt(for: request.inputMode))
         ]
         messages.append(contentsOf: conversationMessages)
+        messages.append(contentsOf: await contextBridgeMessages())
         messages.append(BrainMessage(role: .user, content: input))
         let brainRequest = BrainRequest(
             requestID: request.turnID,
@@ -3360,9 +3363,14 @@ public actor DefaultAssistantSessionOrchestrator {
     }
 
     private func rememberAgentResult(userText: String, contextPacket: AssistantContextPacket) {
-        conversationMessages.append(BrainMessage(role: .user, content: userText))
-        conversationMessages.append(BrainMessage(role: .assistant, content: contextPacket.brainContextText))
+        conversationMessages.append(contentsOf: contextAssembler.memoryMessages(userText: userText, packet: contextPacket))
         trimConversationMessages()
+    }
+
+    private func contextBridgeMessages() async -> [BrainMessage] {
+        let lastPacket = lastContextPacket
+        let recentTasks = await taskLedger.tasks()
+        return contextAssembler.contextMessages(lastPacket: lastPacket, recentTasks: recentTasks)
     }
 
     private func rememberAssistantObservation(_ text: String) {

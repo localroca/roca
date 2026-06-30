@@ -1097,6 +1097,29 @@
               }
             ]
           }
+        },
+        {
+          "id": "explain_discovery_failure",
+          "user": "Why couldn't you find the folder from Codex?",
+          "brain": {
+            "directiveJSON": "{\"type\":\"respond\"}",
+            "responseText": "{\"bubbleText\":\"Codex project lookup timed out, so I could not confirm the Uni Auth folder from Codex. You can give me the local folder or ask me to try again.\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "textContains": "Codex project lookup timed out"
+              }
+            ],
+            "memoryContains": [
+              "Assistant context bridge:",
+              "Recent assistant task ledger:",
+              "failed task; provider=Codex; mode=ask; projectQuery=uni-auth",
+              "couldn't read Codex's project list in time"
+            ],
+            "agentRequestCount": 0
+          }
         }
       ]
     },
