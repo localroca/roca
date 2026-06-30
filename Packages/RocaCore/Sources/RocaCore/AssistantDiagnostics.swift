@@ -7,6 +7,8 @@ public enum AssistantDiagnosticEventKind: String, Codable, Sendable {
     case turnFailed
     case turnBlocked
     case directiveResolved
+    case answerAdmissionDecided
+    case contextBudgetApplied
     case agentProjectLookupStarted
     case agentProjectLookupCompleted
     case agentProjectLookupFailed

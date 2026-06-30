@@ -1623,6 +1623,22 @@ public actor DefaultAssistantSessionOrchestrator {
                 summary: "\(worker.displayName) returned local evidence.",
                 metadata: result.metadata
             )
+            emitDiagnostic(
+                kind: .answerAdmissionDecided,
+                turnID: request.turnID,
+                phase: "skillEvidence",
+                directiveType: .runSkill,
+                outcome: result.evidenceSummary.grade.rawValue,
+                metadata: diagnosticMetadata(
+                    for: request,
+                    extra: [
+                        "skillID": skillID.rawValue,
+                        "evidenceGrade": result.evidenceSummary.grade.rawValue,
+                        "filesScanned": result.metadata["filesScanned"] ?? "0",
+                        "evidenceCharacters": result.metadata["evidenceCharacters"] ?? String(result.evidenceMarkdown.count)
+                    ]
+                )
+            )
 
             let assistantMessageID = appendAssistantMessage(
                 "",
@@ -1641,18 +1657,17 @@ public actor DefaultAssistantSessionOrchestrator {
                 summary: "Formatting \(worker.displayName)'s result."
             )
             timing.responseBrainStartedAt = Date()
-            let response = try await completeAssistantResponse(
-                input: Self.skillResultFormattingPrompt(
-                    userInput: input,
-                    skillName: worker.displayName,
-                    project: project,
-                    localEvidence: result.evidenceMarkdown
-                ),
+            let formatting = try await completeSkillResultResponse(
+                result,
+                input: input,
+                skillName: worker.displayName,
+                project: project,
                 request: request,
                 context: context,
                 provider: brainProvider,
                 messageID: assistantMessageID
             )
+            let response = formatting.response
             timing.responseBrainFinishedAt = Date()
             completeMessage(
                 assistantMessageID,
@@ -1682,7 +1697,8 @@ public actor DefaultAssistantSessionOrchestrator {
                     mode: directive.mode,
                     project: project,
                     summary: response.bubbleText,
-                    detailsMarkdown: response.detailsMarkdown
+                    detailsMarkdown: response.detailsMarkdown,
+                    evidence: formatting.evidenceSummary
                 ),
                 approval: AssistantApprovalContext(riskLevel: .low, approvalBehavior: .notRequired)
             )
@@ -2808,8 +2824,9 @@ public actor DefaultAssistantSessionOrchestrator {
             return directive
         }
 
-        if Self.canRecoverLocalSkillFollowUp(from: directive),
-           let explicitProjectName = Self.explicitProjectName(from: input) {
+        let canRecover = Self.canRecoverLocalSkillFollowUp(from: directive)
+
+        if canRecover, let explicitProjectName = Self.explicitProjectName(from: input) {
             return .runSkill(
                 SkillDirectiveRequest(
                     skillID: SkillID(rawValue: "codebase"),
@@ -2820,9 +2837,46 @@ public actor DefaultAssistantSessionOrchestrator {
             )
         }
 
+        let admission = AnswerAdmissionPolicy.decision(
+            userInput: input,
+            priorResult: lastContextPacket?.priorAgentResult
+        )
+        let admissionCanApply = admission.action == .verifyWithSkill
+            && canRecover
+            && currentTask.project != nil
+        let admissionOutcome = admission.action == .verifyWithSkill && !admissionCanApply
+            ? "notApplied"
+            : admission.action.rawValue
+        emitDiagnostic(
+            kind: .answerAdmissionDecided,
+            turnID: activeTurnID,
+            phase: "answerAdmission",
+            directiveType: directive.metricType,
+            outcome: admissionOutcome,
+            metadata: [
+                "admissionAction": admission.action.rawValue,
+                "reason": admission.reason,
+                "requiredSkillID": admission.requiredSkillID?.rawValue ?? "",
+                "priorEvidenceGrade": lastContextPacket?.priorAgentResult?.evidence?.grade.rawValue ?? "none",
+                "recoverableDirective": String(canRecover)
+            ]
+        )
+        if admission.action == .verifyWithSkill,
+           let project = currentTask.project,
+           canRecover {
+            return .runSkill(
+                SkillDirectiveRequest(
+                    skillID: admission.requiredSkillID ?? SkillID(rawValue: "codebase"),
+                    projectName: project.displayName,
+                    prompt: Self.localSkillFollowUpPrompt(priorPrompt: currentTask.prompt, input: input),
+                    mode: currentTask.mode == .act ? .ask : currentTask.mode
+                )
+            )
+        }
+
         guard Self.isLocalCodebaseFollowUp(input),
               let project = currentTask.project,
-              Self.canRecoverLocalSkillFollowUp(from: directive)
+              canRecover
         else {
             return directive
         }
@@ -3067,6 +3121,97 @@ public actor DefaultAssistantSessionOrchestrator {
             status: .streaming
         )
         return response
+    }
+
+    private func completeSkillResultResponse(
+        _ result: LocalSkillRunResult,
+        input: String,
+        skillName: String,
+        project: ProjectIdentity,
+        request: AssistantSessionTurnRequest,
+        context: AssistantLocalContext,
+        provider: any BrainProvider,
+        messageID: ChatMessageID
+    ) async throws -> (response: AssistantResponseContent, evidenceSummary: AssistantEvidenceSummary) {
+        let firstBudget = AssistantContextBudget.standard
+        let firstEvidence = AssistantContextBudgeter.budgetEvidence(
+            markdown: result.evidenceMarkdown,
+            summary: result.evidenceSummary,
+            budget: firstBudget
+        )
+        emitContextBudgetDiagnostic(
+            firstEvidence,
+            request: request,
+            outcome: firstEvidence.isTruncated ? "standard-truncated" : "standard"
+        )
+        do {
+            let response = try await completeAssistantResponse(
+                input: Self.skillResultFormattingPrompt(
+                    userInput: input,
+                    skillName: skillName,
+                    project: project,
+                    localEvidence: firstEvidence.markdown,
+                    evidenceSummary: firstEvidence.summary
+                ),
+                request: request,
+                context: context,
+                provider: provider,
+                messageID: messageID
+            )
+            return (response, firstEvidence.summary)
+        } catch {
+            guard Self.isContextOverflowError(error) else {
+                throw error
+            }
+            let tightEvidence = AssistantContextBudgeter.budgetEvidence(
+                markdown: result.evidenceMarkdown,
+                summary: result.evidenceSummary,
+                budget: .tight
+            )
+            emitContextBudgetDiagnostic(
+                tightEvidence,
+                request: request,
+                outcome: "overflow-tight-retry"
+            )
+            let response = try await completeAssistantResponse(
+                input: Self.skillResultFormattingPrompt(
+                    userInput: input,
+                    skillName: skillName,
+                    project: project,
+                    localEvidence: tightEvidence.markdown,
+                    evidenceSummary: tightEvidence.summary
+                ),
+                request: request,
+                context: context,
+                provider: provider,
+                messageID: messageID
+            )
+            return (response, tightEvidence.summary)
+        }
+    }
+
+    private func emitContextBudgetDiagnostic(
+        _ evidence: AssistantBudgetedEvidence,
+        request: AssistantSessionTurnRequest,
+        outcome: String
+    ) {
+        emitDiagnostic(
+            kind: .contextBudgetApplied,
+            turnID: request.turnID,
+            phase: "contextBudget",
+            directiveType: .runSkill,
+            outcome: outcome,
+            metadata: diagnosticMetadata(
+                for: request,
+                extra: [
+                    "evidenceGrade": evidence.summary.grade.rawValue,
+                    "originalCharacters": String(evidence.originalCharacterCount),
+                    "budgetedCharacters": String(evidence.budgetedCharacterCount),
+                    "omittedSectionCount": String(evidence.omittedSectionCount),
+                    "isTruncated": String(evidence.isTruncated)
+                ]
+            )
+        )
     }
 
     private func speak(
@@ -3778,6 +3923,18 @@ public actor DefaultAssistantSessionOrchestrator {
         return nil
     }
 
+    private nonisolated static func isContextOverflowError(_ error: Error) -> Bool {
+        if case RocaError.providerUnavailable(let providerID) = error {
+            return providerID.rawValue.localizedCaseInsensitiveContains("context")
+        }
+        let description = error.localizedDescription.lowercased()
+        return description.contains("context")
+            && (description.contains("overflow")
+                || description.contains("too large")
+                || description.contains("too long")
+                || description.contains("exceeds"))
+    }
+
     private nonisolated static func skillResultFormattingFailureMessage(project: ProjectIdentity, error: Error) -> String {
         if let recoveryMessage = brainRecoveryMessage(for: error, phase: .response) {
             return "I inspected \(project.displayName), but \(recoveryMessage)"
@@ -4420,7 +4577,8 @@ public actor DefaultAssistantSessionOrchestrator {
         userInput: String,
         skillName: String,
         project: ProjectIdentity,
-        localEvidence: String
+        localEvidence: String,
+        evidenceSummary: AssistantEvidenceSummary
     ) -> String {
         """
         The user asked Roca to inspect a local project using \(skillName).
@@ -4430,6 +4588,9 @@ public actor DefaultAssistantSessionOrchestrator {
 
         Project:
         \(project.displayName) at \(project.localPath)
+
+        Evidence summary:
+        \(evidenceSummary.brainContextText)
 
         Local evidence gathered by Roca:
         \(localEvidence)

@@ -336,6 +336,93 @@
       ]
     },
     {
+      "id": "codebase_partial_evidence_absence_followup",
+      "title": "Codebase partial evidence absence follow-up",
+      "description": "When prior codebase evidence is partial and the user asks an absence-style factual follow-up, Roca should verify with the Codebase Skill instead of answering from a thin prior summary.",
+      "tags": ["skill", "codebase", "evidence", "context", "issue-35"],
+      "projects": [
+        {
+          "id": "ter-backend",
+          "displayName": "TER Backend",
+          "aliases": ["ter-backend"],
+          "localPath": "/workspace/ter-backend"
+        }
+      ],
+      "localSkill": {
+        "skillID": "codebase",
+        "displayName": "Codebase Skill",
+        "evidenceMarkdown": "# Codebase Skill Evidence\n## Repository Map\n```text\n- Files scanned: 10\n```\n\n## Evidence Contract\nRoca inspected a bounded subset. Treat absence claims as uncertain."
+      },
+      "turns": [
+        {
+          "id": "language_inventory",
+          "user": "What language is the ter-backend project in?",
+          "outputMode": "textOnly",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"ter-backend\",\"prompt\":\"what language is the project in?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"TER Backend is mostly Go.\",\"detailsMarkdown\":null}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "TER Backend is mostly Go."
+              }
+            ],
+            "skillRequestCount": 1,
+            "skillRequests": [
+              {
+                "skillID": "codebase",
+                "workspacePath": "/workspace/ter-backend",
+                "promptContains": "what language is the project in?",
+                "mode": "ask"
+              }
+            ],
+            "diagnostics": [
+              {
+                "kind": "contextBudgetApplied",
+                "phase": "contextBudget"
+              }
+            ]
+          }
+        },
+        {
+          "id": "absence_followup",
+          "user": "So no JavaScript then?",
+          "outputMode": "textOnly",
+          "brain": {
+            "directiveJSON": "{\"type\":\"respond\"}",
+            "responseText": "{\"bubbleText\":\"I checked again. TER Backend has JavaScript infrastructure too.\",\"detailsMarkdown\":\"## Evidence\\n- `infra/package.json`\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I checked again. TER Backend has JavaScript infrastructure too.",
+                "detailsContains": "infra/package.json"
+              }
+            ],
+            "skillRequestCount": 1,
+            "skillRequests": [
+              {
+                "skillID": "codebase",
+                "workspacePath": "/workspace/ter-backend",
+                "promptContains": "So no JavaScript then?",
+                "mode": "ask"
+              }
+            ],
+            "diagnostics": [
+              {
+                "kind": "answerAdmissionDecided",
+                "phase": "answerAdmission",
+                "outcome": "verifyWithSkill"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": "codex_act_intro_copy",
       "title": "Codex act intro copy",
       "description": "Edit requests should say Roca is asking Codex to make a change, not inspect the project.",

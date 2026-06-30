@@ -64,6 +64,7 @@ public struct AssistantAgentResultContext: Codable, Equatable, Sendable {
     public var project: ProjectIdentity?
     public var summary: String
     public var detailsMarkdown: String?
+    public var evidence: AssistantEvidenceSummary?
 
     public init(
         providerID: ProviderID,
@@ -71,7 +72,8 @@ public struct AssistantAgentResultContext: Codable, Equatable, Sendable {
         mode: AgentMode,
         project: ProjectIdentity?,
         summary: String,
-        detailsMarkdown: String?
+        detailsMarkdown: String?,
+        evidence: AssistantEvidenceSummary? = nil
     ) {
         self.providerID = providerID
         self.providerName = providerName
@@ -79,12 +81,16 @@ public struct AssistantAgentResultContext: Codable, Equatable, Sendable {
         self.project = project
         self.summary = summary
         self.detailsMarkdown = detailsMarkdown
+        self.evidence = evidence
     }
 
     public var brainContextText: String {
         let projectText = project.map { "\($0.displayName) at \($0.localPath)" } ?? "no specific project"
-        let base = "provider=\(providerName) (\(providerID.rawValue)); mode=\(mode.rawValue); project=\(projectText); summary=\(summary)"
-        guard let detailsMarkdown, !detailsMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        var base = "provider=\(providerName) (\(providerID.rawValue)); mode=\(mode.rawValue); project=\(projectText); summary=\(summary)"
+        if let evidence {
+            base += "\nEvidence: \(evidence.brainContextText)"
+        }
+        guard let detailsMarkdown = AssistantContextBudgeter.budgetPriorDetails(detailsMarkdown) else {
             return base
         }
         return "\(base)\nDetails:\n\(detailsMarkdown)"

@@ -23,7 +23,14 @@ func assistantContextPacketBuildsModelVisibleContext() {
             mode: .ask,
             project: project,
             summary: "Codex found 2 passkey endpoints.",
-            detailsMarkdown: "- POST /v1/auth/passkey/login/begin"
+            detailsMarkdown: "- POST /v1/auth/passkey/login/begin",
+            evidence: AssistantEvidenceSummary(
+                sourceKind: .externalAgent,
+                sourceID: "codex-agent",
+                sourceName: "Codex",
+                grade: .verified,
+                inspectedPaths: ["routes/passkeys.ts"]
+            )
         ),
         approval: AssistantApprovalContext(
             riskLevel: .medium,
@@ -36,6 +43,8 @@ func assistantContextPacketBuildsModelVisibleContext() {
     #expect(packet.brainContextText.contains("Current task: provider=Codex (codex-agent); mode=ask"))
     #expect(packet.brainContextText.contains("project=Uni Auth at /workspace/uni-auth"))
     #expect(packet.brainContextText.contains("summary=Codex found 2 passkey endpoints."))
+    #expect(packet.brainContextText.contains("Evidence: source=Codex (codex-agent); grade=verified"))
+    #expect(packet.brainContextText.contains("inspectedPaths=routes/passkeys.ts"))
     #expect(packet.brainContextText.contains("POST /v1/auth/passkey/login/begin"))
     #expect(packet.brainContextText.contains("Approval policy: risk=medium; behavior=policyDriven; decision=notRequested"))
 }

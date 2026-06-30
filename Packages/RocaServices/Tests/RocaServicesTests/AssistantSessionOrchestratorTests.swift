@@ -899,6 +899,103 @@ func assistantSessionRerunsLocalSkillForShortLanguageFollowUp() async throws {
 }
 
 @Test
+func assistantSessionVerifiesAbsenceClaimWhenPriorEvidenceIsPartial() async throws {
+    let skill = RecordingLocalSkillWorker(
+        evidenceMarkdown: """
+        # Codebase Skill Evidence
+        ## Repository Map
+        ```text
+        - Files scanned: 10
+        ```
+        ## Evidence Contract
+        Roca inspected a bounded subset. Treat absence claims as uncertain.
+        """
+    )
+    let brain = SequencedSessionBrainProvider(
+        directiveTexts: [
+            #"{"type":"runSkill","skillID":"codebase","projectName":"ter-backend","prompt":"what language is the project in?","mode":"ask"}"#,
+            #"{"type":"respond"}"#
+        ],
+        responseTexts: [
+            ###"{"bubbleText":"TER Backend is mostly Go.","detailsMarkdown":null}"###,
+            ###"{"bubbleText":"I checked again. TER Backend has JavaScript infrastructure too.","detailsMarkdown":"## Evidence\n- `infra/package.json`"}"###
+        ]
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", aliases: ["ter-backend"], localPath: "/workspace/ter-backend")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "What language is the ter-backend project in?",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+    await orchestrator.submitText("So no JavaScript then?", request: sessionRequest(outputMode: .textOnly))
+
+    let requests = await skill.recordedRequests
+    #expect(requests.count == 2)
+    #expect(requests.last?.prompt.contains("Follow-up question:\nSo no JavaScript then?") == true)
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text == "I checked again. TER Backend has JavaScript infrastructure too." })
+}
+
+@Test
+func assistantSessionRetriesSkillFormattingWithTightEvidenceAfterContextOverflow() async throws {
+    let largeEvidence = """
+    # Codebase Skill Evidence
+
+    ## Workspace
+    - Project: TER Backend
+
+    ## Targeted File Evidence
+    \(String(repeating: "- very large evidence line\n", count: 2_000))
+
+    ## Evidence Contract
+    Answer only from gathered evidence.
+    \(String(repeating: "- large contract line\n", count: 1_000))
+    """
+    let skill = RecordingLocalSkillWorker(evidenceMarkdown: largeEvidence)
+    let brain = ContextOverflowFirstSummaryBrainProvider(
+        directiveJSON: #"{"type":"runSkill","skillID":"codebase","projectName":"ter-backend","prompt":"summarize architecture","mode":"ask"}"#,
+        responseText: ###"{"bubbleText":"I summarized TER Backend with the tighter evidence packet.","detailsMarkdown":"## Summary\n- The scan was budgeted."}"###
+    )
+    let orchestrator = DefaultAssistantSessionOrchestrator(
+        resolver: SessionResolver(brain: brain),
+        audioInput: NoopSessionAudioInput(),
+        inserter: NoopSessionInserter(),
+        speechOrchestrator: RecordingSessionSpeech(),
+        contextProvider: StaticSessionContextProvider(),
+        projectCatalog: StaticProjectIdentityCatalog([
+            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", aliases: ["ter-backend"], localPath: "/workspace/ter-backend")
+        ]),
+        localSkillWorkers: [skill],
+        stopSpeech: {}
+    )
+
+    await orchestrator.submitText(
+        "In the ter-backend repo, summarize architecture.",
+        request: sessionRequest(outputMode: .textOnly)
+    )
+
+    let prompts = await brain.generalChatPrompts
+    #expect(prompts.count == 2)
+    #expect(prompts[1].count < prompts[0].count)
+    #expect(prompts[1].contains("## Evidence Contract"))
+
+    let messages = await orchestrator.messageSnapshot
+    #expect(messages.contains { $0.role == .assistant && $0.text == "I summarized TER Backend with the tighter evidence packet." })
+}
+
+@Test
 func assistantSessionAsksFollowUpForAmbiguousAgentProject() async throws {
     let orchestrator = DefaultAssistantSessionOrchestrator(
         resolver: SessionResolver(
@@ -2004,6 +2101,51 @@ private actor FailingFirstSummaryBrainProvider: BrainProvider {
         summaryRequestCount += 1
         if summaryRequestCount == 1 {
             throw RocaError.providerUnavailable(ProviderID(rawValue: "ollama"))
+        }
+        return Self.stream(responseText, providerID: id)
+    }
+
+    func cancel(_ requestID: BrainRequestID) async {}
+
+    private nonisolated static func stream(_ text: String, providerID: ProviderID) -> AsyncThrowingStream<BrainEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.final(BrainResponse(text: text, usedProvider: providerID, metadata: [:])))
+            continuation.finish()
+        }
+    }
+}
+
+private actor ContextOverflowFirstSummaryBrainProvider: BrainProvider {
+    let id = ProviderID(rawValue: "test-brain")
+    let displayName = "Test Brain"
+    let capabilities = BrainCapabilities(
+        supportsStreaming: false,
+        supportsToolCalls: false,
+        supportsLocalExecution: true,
+        locality: .local
+    )
+
+    private let directiveJSON: String
+    private let responseText: String
+    private var summaryRequestCount = 0
+    private(set) var generalChatPrompts: [String] = []
+
+    init(directiveJSON: String, responseText: String) {
+        self.directiveJSON = directiveJSON
+        self.responseText = responseText
+    }
+
+    func prepare() async throws {}
+
+    func complete(_ request: BrainRequest) async throws -> AsyncThrowingStream<BrainEvent, Error> {
+        if request.role == .companionRouter {
+            return Self.stream(directiveJSON, providerID: id)
+        }
+
+        summaryRequestCount += 1
+        generalChatPrompts.append(request.messages.last?.content ?? "")
+        if summaryRequestCount == 1 {
+            throw RocaError.providerUnavailable(ProviderID(rawValue: "ollama:context-22000-over-8192"))
         }
         return Self.stream(responseText, providerID: id)
     }

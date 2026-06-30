@@ -34,17 +34,25 @@ public struct LocalSkillRunResult: Equatable, Sendable {
     public var runID: SkillRunID
     public var skillID: SkillID
     public var evidenceMarkdown: String
+    public var evidenceSummary: AssistantEvidenceSummary
     public var metadata: [String: String]
 
     public init(
         runID: SkillRunID,
         skillID: SkillID,
         evidenceMarkdown: String,
+        evidenceSummary: AssistantEvidenceSummary? = nil,
         metadata: [String: String] = [:]
     ) {
         self.runID = runID
         self.skillID = skillID
         self.evidenceMarkdown = evidenceMarkdown
+        self.evidenceSummary = evidenceSummary ?? AssistantEvidenceSummary(
+            sourceKind: .localSkill,
+            sourceID: skillID.rawValue,
+            sourceName: SkillDirectiveRequest.skillDisplayName(for: skillID) ?? skillID.rawValue,
+            grade: .partial
+        )
         self.metadata = metadata
     }
 }
@@ -133,16 +141,46 @@ public struct CodebaseSkillWorker: LocalSkillWorking {
         }
 
         sections.append(markdownSection("Evidence Contract", targetedEvidence.evidenceContract))
+        let evidenceMarkdown = sections.joined(separator: "\n\n")
+        let evidenceGrade: AssistantEvidenceGrade = repoMap.scannedFileCount > 0 ? .verified : .insufficient
+        let evidenceSummary = AssistantEvidenceSummary(
+            sourceKind: .localSkill,
+            sourceID: skillID.rawValue,
+            sourceName: displayName,
+            grade: evidenceGrade,
+            projectID: request.project.id.rawValue,
+            projectName: request.project.displayName,
+            workspacePath: workspacePath,
+            scannedFileCount: repoMap.scannedFileCount,
+            manifestCount: repoMap.manifests.count,
+            inspectedPaths: targetedEvidence.inspectedPaths,
+            searchTerms: searchTerms,
+            omittedPathCount: targetedEvidence.omittedPathCount,
+            originalCharacterCount: evidenceMarkdown.count,
+            budgetedCharacterCount: evidenceMarkdown.count,
+            isTruncated: false,
+            coverageNotes: [
+                "Scanned non-generated files and excluded common dependency/build output directories.",
+                "Read targeted snippets selected from manifests, relevant paths, and task terms."
+            ],
+            limitations: targetedEvidence.omittedPathCount > 0
+                ? ["Some candidate files were omitted from targeted snippets to keep evidence bounded."]
+                : []
+        )
 
         return LocalSkillRunResult(
             runID: request.runID,
             skillID: request.skillID,
-            evidenceMarkdown: sections.joined(separator: "\n\n"),
+            evidenceMarkdown: evidenceMarkdown,
+            evidenceSummary: evidenceSummary,
             metadata: [
                 "toolCount": String(toolCount),
                 "filesScanned": String(repoMap.scannedFileCount),
                 "manifestCount": String(repoMap.manifests.count),
                 "targetedPathCount": String(repoMap.relevantPaths.count),
+                "evidenceGrade": evidenceSummary.grade.rawValue,
+                "evidenceCharacters": String(evidenceMarkdown.count),
+                "omittedPathCount": String(evidenceSummary.omittedPathCount),
                 "taskProfile": taskProfile.rawValue,
                 "workspacePath": workspacePath
             ]
@@ -938,6 +976,8 @@ private struct CodebaseManifest: Sendable {
 
 private struct CodebaseTargetedEvidence: Sendable {
     var snippets: [String]
+    var inspectedPaths: [String]
+    var omittedPathCount: Int
     var evidenceContract: String
 
     static func collect(
@@ -974,7 +1014,12 @@ private struct CodebaseTargetedEvidence: Sendable {
         If the evidence does not prove something, say what was inspected and what remains uncertain.
         Do not claim a language, framework, folder, or file type is absent unless the repository map or search evidence establishes that.
         """
-        return CodebaseTargetedEvidence(snippets: snippets, evidenceContract: contract)
+        return CodebaseTargetedEvidence(
+            snippets: snippets,
+            inspectedPaths: inspected,
+            omittedPathCount: max(0, candidates.count - inspected.count),
+            evidenceContract: contract
+        )
     }
 
     private static func snippetCandidates(
