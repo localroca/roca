@@ -12,16 +12,16 @@ func projectIdentityStoreRoundTripsProjects() async throws {
     }
     let store = JSONProjectIdentityStore(fileURL: directory.appendingPathComponent("projects.json"))
     let project = ProjectIdentity(
-        id: "uni-auth",
-        displayName: "Uni Auth",
-        aliases: ["uni-auth", "auth"],
-        localPath: "/workspace/uni-auth",
-        gitRemoteURL: "git@github.com:local/uni-auth.git",
+        id: "sample-auth",
+        displayName: "Sample Auth",
+        aliases: ["sample-auth", "auth"],
+        localPath: "/workspace/sample-auth",
+        gitRemoteURL: "git@github.com:local/sample-auth.git",
         agentThreads: [
             ProjectAgentThreadReference(
                 providerID: ProviderID(rawValue: "codex-agent"),
                 threadID: "thread-1",
-                title: "Passkeys",
+                title: "Logins",
                 updatedAt: Date(timeIntervalSince1970: 100)
             )
         ]

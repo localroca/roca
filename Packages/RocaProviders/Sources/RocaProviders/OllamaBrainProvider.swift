@@ -29,7 +29,7 @@ public struct OllamaModel: Codable, Equatable, Identifiable, Sendable {
 }
 
 public final class OllamaBrainProvider: BrainProvider, @unchecked Sendable {
-    public static let requestTimeoutSecondsMetadataKey = "requestTimeoutSeconds"
+    public static let requestTimeoutSecondsMetadataKey = BrainRequestMetadataKeys.requestTimeoutSeconds
     public static let maxAutomaticContextWindow = 32_768
 
     public let id = BuiltInProviderIDs.ollamaBrain

@@ -266,8 +266,8 @@ public actor NoisySessionAgentProvider: AgentProvider, AgentProjectDiscovering {
             continuation.yield(.started(runID: request.runID, providerID: id))
             continuation.yield(.toolActivity(AgentToolActivity(kind: .command, title: "ls", status: "listing project files")))
             continuation.yield(.textDelta("I'll run ls and grep to inspect the project.\n"))
-            continuation.yield(.toolActivity(AgentToolActivity(kind: .command, title: "grep", status: "searching passkey routes")))
-            continuation.yield(.textDelta("grep found passkey routes.\n"))
+            continuation.yield(.toolActivity(AgentToolActivity(kind: .command, title: "grep", status: "searching login routes")))
+            continuation.yield(.textDelta("grep found login routes.\n"))
             continuation.yield(.final(AgentResponse(text: responseText, usedProvider: id)))
             continuation.finish()
         }
@@ -416,12 +416,17 @@ public actor RecordingSessionSpeech: SpeechOrchestrating {
     public private(set) var spokenTexts: [String] = []
     private var utteranceMetrics: [UtteranceID: SpeechUtteranceMetrics] = [:]
     private let chunkCharacterLimit: Int?
+    private let maximumAcceptedCharacters: Int?
 
-    public init(chunkCharacterLimit: Int? = nil) {
+    public init(chunkCharacterLimit: Int? = nil, maximumAcceptedCharacters: Int? = nil) {
         self.chunkCharacterLimit = chunkCharacterLimit
+        self.maximumAcceptedCharacters = maximumAcceptedCharacters
     }
 
     public func speak(_ request: SpeechRequest) async throws {
+        if let maximumAcceptedCharacters, request.text.count > maximumAcceptedCharacters {
+            throw RocaError.synthesisFailed("Selected text is too long for Kokoro. Try a shorter selection.")
+        }
         speakCount += 1
         spokenTexts.append(request.text)
         utteranceMetrics[request.utteranceID] = SpeechUtteranceMetrics(

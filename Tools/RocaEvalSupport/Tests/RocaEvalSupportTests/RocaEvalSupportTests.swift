@@ -148,11 +148,11 @@ func evalRunnerDryRunsAgentDirectives() async throws {
                 turns: [
                     EvalTurn(
                         id: "ask",
-                        user: "Ask Codex about uni-auth passkeys.",
+                        user: "Ask Codex about sample-auth logins.",
                         expectations: EvalTurnExpectations(
                             directives: [.runAgent],
                             agentProviderID: "codex-agent",
-                            projectName: "uni-auth",
+                            projectName: "sample-auth",
                             agentMode: .ask
                         )
                     )
@@ -163,7 +163,7 @@ func evalRunnerDryRunsAgentDirectives() async throws {
     let client = ScriptedEvalBrainClient(
         models: ["test-model"],
         responses: [
-            #"{"type":"runAgent","providerID":"codex-agent","projectName":"uni-auth","prompt":"what passkey endpoints exist?","mode":"ask"}"#
+            #"{"type":"runAgent","providerID":"codex-agent","projectName":"sample-auth","prompt":"what login endpoints exist?","mode":"ask"}"#
         ]
     )
     let runner = EvalRunner(client: client)
@@ -183,9 +183,9 @@ func evalRunnerDryRunsAgentDirectives() async throws {
     #expect(record.parsedDirective == .runAgent)
     #expect(record.dryRunAction == .wouldRunAgent)
     #expect(record.directiveAgentProviderID == "codex-agent")
-    #expect(record.directiveProjectName == "uni-auth")
+    #expect(record.directiveProjectName == "sample-auth")
     #expect(record.directiveAgentMode == .ask)
-    #expect(record.directivePrompt == "what passkey endpoints exist?")
+    #expect(record.directivePrompt == "what login endpoints exist?")
     #expect(!record.criticalRoutingFailure)
     #expect(await client.requestRoles == [.companionRouter])
 }
@@ -459,10 +459,10 @@ func interactionEvalRunnerMocksAgentHandoffAndWritesResults() async throws {
     #expect(output.run.turnCount == 1)
     #expect(output.run.failedTurnCount == 0)
     #expect(record.passed)
-    #expect(record.agentRequests.first?.workspacePath == "/workspace/uni-auth")
+    #expect(record.agentRequests.first?.workspacePath == "/workspace/sample-auth")
     #expect(record.spokenTexts == [
-        "I'll ask Codex to inspect Uni Auth and summarize what it finds.",
-        "Codex found 2 passkey endpoints. I put the list below."
+        "I'll ask Codex to inspect Sample Auth and summarize what it finds.",
+        "Codex found 2 login endpoints. I put the list below."
     ])
     #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("interaction_run.json").path))
     #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("interaction_transcripts.jsonl").path))
@@ -544,26 +544,26 @@ private func interactionSuiteFixtureData() -> Data {
           "tags": ["agent", "codex", "details"],
           "projects": [
             {
-              "id": "uni-auth",
-              "displayName": "Uni Auth",
-              "aliases": ["uni-auth"],
-              "localPath": "/workspace/uni-auth"
+              "id": "sample-auth",
+              "displayName": "Sample Auth",
+              "aliases": ["sample-auth"],
+              "localPath": "/workspace/sample-auth"
             }
           ],
           "agent": {
             "providerID": "codex-agent",
             "displayName": "Codex",
             "kind": "noisy",
-            "responseText": "| Method | Endpoint |\n|---|---|\n| POST | /v1/auth/passkey/login/begin |\n| POST | /v1/auth/passkey/login/finish |"
+            "responseText": "| Method | Endpoint |\n|---|---|\n| POST | /v1/auth/login/login/begin |\n| POST | /v1/auth/login/login/finish |"
           },
           "turns": [
             {
               "id": "ask_endpoints",
-              "user": "Can you ask uni-auth in Codex what endpoints there are for passkeys?",
+              "user": "Can you ask sample-auth in Codex what endpoints there are for logins?",
               "outputMode": "speakAll",
               "brain": {
-                "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}",
-                "responseText": "{\"bubbleText\":\"Codex found 2 passkey endpoints. I put the list below.\",\"detailsMarkdown\":\"## Passkey endpoints\\n- POST /v1/auth/passkey/login/begin\\n- POST /v1/auth/passkey/login/finish\"}"
+                "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"what login endpoints exist?\",\"mode\":\"ask\"}",
+                "responseText": "{\"bubbleText\":\"Codex found 2 login endpoints. I put the list below.\",\"detailsMarkdown\":\"## Login endpoints\\n- POST /v1/auth/login/login/begin\\n- POST /v1/auth/login/login/finish\"}"
               },
               "expectations": {
                 "messages": [
@@ -578,20 +578,20 @@ private func interactionSuiteFixtureData() -> Data {
                   },
                   {
                     "role": "assistant",
-                    "text": "Codex found 2 passkey endpoints. I put the list below.",
-                    "detailsContains": "/v1/auth/passkey/login/begin"
+                    "text": "Codex found 2 login endpoints. I put the list below.",
+                    "detailsContains": "/v1/auth/login/login/begin"
                   }
                 ],
-                "forbiddenMessageTextContains": ["listing project files", "grep found passkey routes"],
+                "forbiddenMessageTextContains": ["listing project files", "grep found login routes"],
                 "spokenTexts": [
-                  "I'll ask Codex to inspect Uni Auth and summarize what it finds.",
-                  "Codex found 2 passkey endpoints. I put the list below."
+                  "I'll ask Codex to inspect Sample Auth and summarize what it finds.",
+                  "Codex found 2 login endpoints. I put the list below."
                 ],
                 "agentRequests": [
                   {
                     "providerID": "codex-agent",
-                    "workspacePath": "/workspace/uni-auth",
-                    "promptContains": "passkey endpoints",
+                    "workspacePath": "/workspace/sample-auth",
+                    "promptContains": "login endpoints",
                     "mode": "ask"
                   }
                 ],

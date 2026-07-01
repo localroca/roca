@@ -7,8 +7,8 @@ func answerAdmissionVerifiesCodebaseFactWhenEvidenceIsPartial() {
         providerID: "local-skill",
         providerName: "Codebase Skill",
         mode: .ask,
-        project: ProjectIdentity(id: "ter-backend", displayName: "TER Backend", aliases: ["ter-backend"], localPath: "/workspace/ter-backend"),
-        summary: "TER Backend is mostly Go.",
+        project: ProjectIdentity(id: "nova-backend", displayName: "Nova Backend", aliases: ["nova-backend"], localPath: "/workspace/nova-backend"),
+        summary: "Nova Backend is mostly Go.",
         detailsMarkdown: nil,
         evidence: AssistantEvidenceSummary(
             sourceKind: .localSkill,
@@ -34,7 +34,7 @@ func answerAdmissionAllowsReadingPriorDetailsWithoutVerification() {
         providerID: "local-skill",
         providerName: "Codebase Skill",
         mode: .ask,
-        project: ProjectIdentity(id: "uni-auth", displayName: "Uni Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth"),
+        project: ProjectIdentity(id: "sample-auth", displayName: "Sample Auth", aliases: ["sample-auth"], localPath: "/workspace/sample-auth"),
         summary: "I found the endpoint flow.",
         detailsMarkdown: "## Flow\n- begin\n- finish",
         evidence: AssistantEvidenceSummary(

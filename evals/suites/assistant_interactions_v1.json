@@ -11,32 +11,32 @@
       "tags": ["agent", "codex", "handoff", "speech", "details", "issue-29"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
         "providerID": "codex-agent",
         "displayName": "Codex",
         "kind": "noisy",
-        "responseText": "| Method | Endpoint |\n|---|---|\n| POST | /v1/auth/passkey/login/begin |\n| POST | /v1/auth/passkey/login/finish |"
+        "responseText": "| Method | Endpoint |\n|---|---|\n| POST | /v1/auth/login/login/begin |\n| POST | /v1/auth/login/login/finish |"
       },
       "turns": [
         {
           "id": "ask_endpoints",
-          "user": "Can you ask uni-auth in Codex what endpoints there are for passkeys?",
+          "user": "Can you ask sample-auth in Codex what endpoints there are for logins?",
           "outputMode": "speakAll",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"Codex found 2 passkey endpoints. I put the list below.\",\"detailsMarkdown\":\"## Passkey endpoints\\n- POST /v1/auth/passkey/login/begin\\n- POST /v1/auth/passkey/login/finish\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"what login endpoints exist?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found 2 login endpoints. I put the list below.\",\"detailsMarkdown\":\"## Login endpoints\\n- POST /v1/auth/login/login/begin\\n- POST /v1/auth/login/login/finish\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "I'll ask Codex to inspect Uni Auth and summarize what it finds."
+                "text": "I'll ask Codex to inspect Sample Auth and summarize what it finds."
               },
               {
                 "role": "action",
@@ -45,20 +45,20 @@
               },
               {
                 "role": "assistant",
-                "text": "Codex found 2 passkey endpoints. I put the list below.",
-                "detailsContains": "/v1/auth/passkey/login/begin"
+                "text": "Codex found 2 login endpoints. I put the list below.",
+                "detailsContains": "/v1/auth/login/login/begin"
               }
             ],
-            "forbiddenMessageTextContains": ["listing project files", "grep found passkey routes", "I'll run ls"],
+            "forbiddenMessageTextContains": ["listing project files", "grep found login routes", "I'll run ls"],
             "spokenTexts": [
-              "I'll ask Codex to inspect Uni Auth and summarize what it finds.",
-              "Codex found 2 passkey endpoints. I put the list below."
+              "I'll ask Codex to inspect Sample Auth and summarize what it finds.",
+              "Codex found 2 login endpoints. I put the list below."
             ],
             "agentRequests": [
               {
                 "providerID": "codex-agent",
-                "workspacePath": "/workspace/uni-auth",
-                "promptContains": "passkey endpoints",
+                "workspacePath": "/workspace/sample-auth",
+                "promptContains": "login endpoints",
                 "mode": "ask"
               }
             ],
@@ -140,31 +140,31 @@
       "tags": ["skill", "codebase", "developer-workflow", "issue-8"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "localSkill": {
         "skillID": "codebase",
         "displayName": "Codebase Skill",
-        "evidenceMarkdown": "# Codebase Skill Evidence\n## Search Results\n- routes/passkeys.ts\n- services/passkeyRecovery.ts\n\n## Notes\nPlan should cover tradeoffs and tests."
+        "evidenceMarkdown": "# Codebase Skill Evidence\n## Search Results\n- routes/login.ts\n- services/loginRecovery.ts\n\n## Notes\nPlan should cover tradeoffs and tests."
       },
       "turns": [
         {
           "id": "implementation_plan",
-          "user": "For the Uni Auth repo, draft an implementation plan for passkey recovery and tradeoffs.",
+          "user": "For the Sample Auth repo, draft an implementation plan for login recovery and tradeoffs.",
           "outputMode": "speakAll",
           "brain": {
-            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"uni-auth\",\"prompt\":\"draft an implementation plan for passkey recovery with tradeoffs\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"I drafted the local passkey recovery plan.\",\"detailsMarkdown\":\"## Plan\\n- Inspect passkey recovery routes.\\n- Map service boundaries.\\n- Add focused tests.\\n\\n## Tradeoffs\\n- Keep recovery small for alpha, then expand.\"}"
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"sample-auth\",\"prompt\":\"draft an implementation plan for login recovery with tradeoffs\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"I drafted the local login recovery plan.\",\"detailsMarkdown\":\"## Plan\\n- Inspect login recovery routes.\\n- Map service boundaries.\\n- Add focused tests.\\n\\n## Tradeoffs\\n- Keep recovery small for alpha, then expand.\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "I'll inspect Uni Auth locally and draft a concise plan."
+                "text": "I'll inspect Sample Auth locally and draft a concise plan."
               },
               {
                 "role": "action",
@@ -173,21 +173,82 @@
               },
               {
                 "role": "assistant",
-                "text": "I drafted the local passkey recovery plan.",
+                "text": "I drafted the local login recovery plan.",
                 "detailsContains": "## Tradeoffs"
               }
             ],
             "spokenTexts": [
-              "I'll inspect Uni Auth locally and draft a concise plan.",
-              "I drafted the local passkey recovery plan."
+              "I'll inspect Sample Auth locally and draft a concise plan.",
+              "I drafted the local login recovery plan."
             ],
             "agentRequestCount": 0,
             "skillRequests": [
               {
                 "skillID": "codebase",
-                "workspacePath": "/workspace/uni-auth",
+                "workspacePath": "/workspace/sample-auth",
                 "promptContains": "Roca developer workflow: implementation plan",
                 "mode": "plan"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "spreadsheet_filtered_average",
+      "title": "Spreadsheet filtered average",
+      "description": "A local spreadsheet question should route to Spreadsheet Skill, keep speech concise, and put calculation provenance in details.",
+      "tags": ["skill", "spreadsheet", "analytics", "issue-37"],
+      "projects": [
+        {
+          "id": "sales-report",
+          "displayName": "Sales Report",
+          "aliases": ["sales report"],
+          "localPath": "/workspace/sales.csv"
+        }
+      ],
+      "localSkill": {
+        "skillID": "spreadsheet",
+        "displayName": "Spreadsheet Skill",
+        "evidenceMarkdown": "# Spreadsheet Skill Evidence\n## Average\nThe average of Amount is 200 across 2 numeric row(s).\n\nOperation: average\nValue column: Amount\nMatching rows: 2\nNumeric rows used: 2\nFilters: Status = Paid\n\n## Preview: sales\n| Region | Status | Amount |\n|---|---|---|\n| North | Paid | 100 |\n| North | Paid | 300 |"
+      },
+      "turns": [
+        {
+          "id": "filtered_average",
+          "user": "In the sales report spreadsheet, what is the average amount where status is paid?",
+          "outputMode": "speakAll",
+          "brain": {
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"spreadsheet\",\"projectName\":\"sales report\",\"prompt\":\"calculate the average amount where status is paid\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"The paid average amount is 200 across 2 numeric rows.\",\"detailsMarkdown\":\"## Calculation\\n- Sheet: sales\\n- Value column: Amount\\n- Filter: Status = Paid\\n- Matching rows: 2\\n- Numeric rows used: 2\"}"
+          },
+          "expectations": {
+            "messages": [
+              {
+                "role": "assistant",
+                "text": "I'll analyze Sales Report locally and show the calculation."
+              },
+              {
+                "role": "action",
+                "text": "Spreadsheet Skill finished.",
+                "status": "completed"
+              },
+              {
+                "role": "assistant",
+                "text": "The paid average amount is 200 across 2 numeric rows.",
+                "detailsContains": "Status = Paid"
+              }
+            ],
+            "spokenTexts": [
+              "I'll analyze Sales Report locally and show the calculation.",
+              "The paid average amount is 200 across 2 numeric rows."
+            ],
+            "agentRequestCount": 0,
+            "skillRequests": [
+              {
+                "skillID": "spreadsheet",
+                "workspacePath": "/workspace/sales.csv",
+                "promptContains": "average amount",
+                "mode": "ask"
               }
             ]
           }
@@ -201,10 +262,10 @@
       "tags": ["skill", "codebase", "infra", "developer-workflow", "issue-8"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "localSkill": {
@@ -215,17 +276,17 @@
       "turns": [
         {
           "id": "language_inventory",
-          "user": "In the Uni Auth repo, what language is the project in?",
+          "user": "In the Sample Auth repo, what language is the project in?",
           "outputMode": "speakAll",
           "brain": {
-            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"uni-auth\",\"prompt\":\"what language is the project in?\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"Uni Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra.\",\"detailsMarkdown\":\"## Evidence\\n- `go.mod`: Go module\\n- `infra/package.json`: JavaScript/Node package\\n- `infra/cdk.json`: AWS CDK app\"}"
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"sample-auth\",\"prompt\":\"what language is the project in?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Sample Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra.\",\"detailsMarkdown\":\"## Evidence\\n- `go.mod`: Go module\\n- `infra/package.json`: JavaScript/Node package\\n- `infra/cdk.json`: AWS CDK app\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "I'll check Uni Auth's languages and project structure."
+                "text": "I'll check Sample Auth's languages and project structure."
               },
               {
                 "role": "action",
@@ -234,19 +295,19 @@
               },
               {
                 "role": "assistant",
-                "text": "Uni Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra.",
+                "text": "Sample Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra.",
                 "detailsContains": "infra/package.json"
               }
             ],
             "spokenTexts": [
-              "I'll check Uni Auth's languages and project structure.",
-              "Uni Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra."
+              "I'll check Sample Auth's languages and project structure.",
+              "Sample Auth's main app evidence points to Go, with separate JavaScript CDK infrastructure under infra."
             ],
             "agentRequestCount": 0,
             "skillRequests": [
               {
                 "skillID": "codebase",
-                "workspacePath": "/workspace/uni-auth",
+                "workspacePath": "/workspace/sample-auth",
                 "promptContains": "what language is the project in?",
                 "mode": "ask"
               }
@@ -265,7 +326,7 @@
             "messages": [
               {
                 "role": "assistant",
-                "text": "Got it, I'll look specifically at Uni Auth's infrastructure code."
+                "text": "Got it, I'll look specifically at Sample Auth's infrastructure code."
               },
               {
                 "role": "action",
@@ -279,14 +340,14 @@
               }
             ],
             "spokenTexts": [
-              "Got it, I'll look specifically at Uni Auth's infrastructure code.",
+              "Got it, I'll look specifically at Sample Auth's infrastructure code.",
               "The deployment infrastructure evidence points to JavaScript AWS CDK under infra."
             ],
             "agentRequestCount": 0,
             "skillRequests": [
               {
                 "skillID": "codebase",
-                "workspacePath": "/workspace/uni-auth",
+                "workspacePath": "/workspace/sample-auth",
                 "promptContains": "inspect infrastructure code",
                 "mode": "ask"
               }
@@ -305,7 +366,7 @@
             "messages": [
               {
                 "role": "assistant",
-                "text": "Got it, I'll look specifically at Uni Auth's infrastructure code."
+                "text": "Got it, I'll look specifically at Sample Auth's infrastructure code."
               },
               {
                 "role": "action",
@@ -319,14 +380,14 @@
               }
             ],
             "spokenTexts": [
-              "Got it, I'll look specifically at Uni Auth's infrastructure code.",
+              "Got it, I'll look specifically at Sample Auth's infrastructure code.",
               "You were right, the deployment infra evidence is JavaScript CDK in the infra folder."
             ],
             "agentRequestCount": 0,
             "skillRequests": [
               {
                 "skillID": "codebase",
-                "workspacePath": "/workspace/uni-auth",
+                "workspacePath": "/workspace/sample-auth",
                 "promptContains": "inspect deployment infra in the infra folder",
                 "mode": "ask"
               }
@@ -342,10 +403,10 @@
       "tags": ["skill", "codebase", "evidence", "context", "issue-35"],
       "projects": [
         {
-          "id": "ter-backend",
-          "displayName": "TER Backend",
-          "aliases": ["ter-backend"],
-          "localPath": "/workspace/ter-backend"
+          "id": "nova-backend",
+          "displayName": "Nova Backend",
+          "aliases": ["nova-backend"],
+          "localPath": "/workspace/nova-backend"
         }
       ],
       "localSkill": {
@@ -356,24 +417,24 @@
       "turns": [
         {
           "id": "language_inventory",
-          "user": "What language is the ter-backend project in?",
+          "user": "What language is the nova-backend project in?",
           "outputMode": "textOnly",
           "brain": {
-            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"ter-backend\",\"prompt\":\"what language is the project in?\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"TER Backend is mostly Go.\",\"detailsMarkdown\":null}"
+            "directiveJSON": "{\"type\":\"runSkill\",\"skillID\":\"codebase\",\"projectName\":\"nova-backend\",\"prompt\":\"what language is the project in?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Nova Backend is mostly Go.\",\"detailsMarkdown\":null}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "TER Backend is mostly Go."
+                "text": "Nova Backend is mostly Go."
               }
             ],
             "skillRequestCount": 1,
             "skillRequests": [
               {
                 "skillID": "codebase",
-                "workspacePath": "/workspace/ter-backend",
+                "workspacePath": "/workspace/nova-backend",
                 "promptContains": "what language is the project in?",
                 "mode": "ask"
               }
@@ -392,13 +453,13 @@
           "outputMode": "textOnly",
           "brain": {
             "directiveJSON": "{\"type\":\"respond\"}",
-            "responseText": "{\"bubbleText\":\"I checked again. TER Backend has JavaScript infrastructure too.\",\"detailsMarkdown\":\"## Evidence\\n- `infra/package.json`\"}"
+            "responseText": "{\"bubbleText\":\"I checked again. Nova Backend has JavaScript infrastructure too.\",\"detailsMarkdown\":\"## Evidence\\n- `infra/package.json`\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "I checked again. TER Backend has JavaScript infrastructure too.",
+                "text": "I checked again. Nova Backend has JavaScript infrastructure too.",
                 "detailsContains": "infra/package.json"
               }
             ],
@@ -406,7 +467,7 @@
             "skillRequests": [
               {
                 "skillID": "codebase",
-                "workspacePath": "/workspace/ter-backend",
+                "workspacePath": "/workspace/nova-backend",
                 "promptContains": "So no JavaScript then?",
                 "mode": "ask"
               }
@@ -429,48 +490,48 @@
       "tags": ["agent", "codex", "handoff", "copy", "issue-29"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
         "providerID": "codex-agent",
         "displayName": "Codex",
         "kind": "normal",
-        "responseText": "Updated routes/passkeys.ts."
+        "responseText": "Updated routes/login.ts."
       },
       "turns": [
         {
           "id": "ask_codex_to_edit",
-          "user": "Ask Codex to add a short comment to the Uni Auth passkey route.",
+          "user": "Ask Codex to add a short comment to the Sample Auth login route.",
           "outputMode": "speakAll",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"add a short comment to the passkey route\",\"mode\":\"act\"}",
-            "responseText": "{\"bubbleText\":\"Codex updated the passkey route comment.\",\"detailsMarkdown\":\"Changed routes/passkeys.ts.\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"add a short comment to the login route\",\"mode\":\"act\"}",
+            "responseText": "{\"bubbleText\":\"Codex updated the login route comment.\",\"detailsMarkdown\":\"Changed routes/login.ts.\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "I'll ask Codex to make that change in Uni Auth and summarize what changed."
+                "text": "I'll ask Codex to make that change in Sample Auth and summarize what changed."
               },
               {
                 "role": "assistant",
-                "text": "Codex updated the passkey route comment. Changed file: routes/passkeys.ts.",
-                "detailsContains": "routes/passkeys.ts"
+                "text": "Codex updated the login route comment. Changed file: routes/login.ts.",
+                "detailsContains": "routes/login.ts"
               }
             ],
-            "forbiddenMessageTextContains": ["inspect Uni Auth and summarize what it finds"],
+            "forbiddenMessageTextContains": ["inspect Sample Auth and summarize what it finds"],
             "spokenTexts": [
-              "I'll ask Codex to make that change in Uni Auth and summarize what changed.",
-              "Codex updated the passkey route comment. Changed file: routes/passkeys.ts."
+              "I'll ask Codex to make that change in Sample Auth and summarize what changed.",
+              "Codex updated the login route comment. Changed file: routes/login.ts."
             ],
             "agentRequests": [
               {
                 "providerID": "codex-agent",
-                "workspacePath": "/workspace/uni-auth",
+                "workspacePath": "/workspace/sample-auth",
                 "promptContains": "short comment",
                 "mode": "act"
               }
@@ -486,31 +547,31 @@
       "tags": ["agent", "codex", "speech", "memory", "issue-29"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
         "providerID": "codex-agent",
         "displayName": "Codex",
         "kind": "normal",
-        "responseText": "POST /v1/auth/passkey/login/begin\nPOST /v1/auth/passkey/login/finish"
+        "responseText": "POST /v1/auth/login/login/begin\nPOST /v1/auth/login/login/finish"
       },
       "turns": [
         {
           "id": "ask_endpoints",
-          "user": "Ask Codex for the Uni Auth passkey endpoints.",
+          "user": "Ask Codex for the Sample Auth login endpoints.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"list passkey endpoints\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"Codex found 2 passkey endpoints.\",\"detailsMarkdown\":\"## Endpoints\\n- POST /v1/auth/passkey/login/begin\\n- POST /v1/auth/passkey/login/finish\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"list login endpoints\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found 2 login endpoints.\",\"detailsMarkdown\":\"## Endpoints\\n- POST /v1/auth/login/login/begin\\n- POST /v1/auth/login/login/finish\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "detailsContains": "/v1/auth/passkey/login/begin"
+                "detailsContains": "/v1/auth/login/login/begin"
               }
             ]
           }
@@ -521,7 +582,7 @@
           "outputMode": "speakAll",
           "brain": {
             "directiveJSON": "{\"type\":\"readSelection\"}",
-            "responseText": "{\"bubbleText\":\"Codex found two Uni Auth passkey endpoints: one to begin login and one to finish login.\",\"detailsMarkdown\":null}"
+            "responseText": "{\"bubbleText\":\"Codex found two Sample Auth login endpoints: one to begin login and one to finish login.\",\"detailsMarkdown\":null}"
           },
           "expectations": {
             "messages": [
@@ -531,8 +592,8 @@
               }
             ],
             "forbiddenMessageTextContains": ["No selected text found"],
-            "spokenTexts": ["Codex found two Uni Auth passkey endpoints: one to begin login and one to finish login."],
-            "memoryContains": ["Context packet:", "/v1/auth/passkey/login/begin"]
+            "spokenTexts": ["Codex found two Sample Auth login endpoints: one to begin login and one to finish login."],
+            "memoryContains": ["Context packet:", "/v1/auth/login/login/begin"]
           }
         }
       ]
@@ -549,17 +610,17 @@
           "outputMode": "speakAll",
           "brain": {
             "directiveJSON": "{\"type\":\"readSelection\"}",
-            "responseText": "{\"bubbleText\":\"Sure. The flow is: start the passkey login, let the client complete the platform challenge, then finish the login with the signed result.\",\"detailsMarkdown\":null}"
+            "responseText": "{\"bubbleText\":\"Sure. The flow is: start the secure login, let the client complete the platform challenge, then finish the login with the signed result.\",\"detailsMarkdown\":null}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "textContains": "start the passkey login"
+                "textContains": "start the secure login"
               }
             ],
             "forbiddenMessageTextContains": ["##", "| Method |", "- POST"],
-            "spokenTexts": ["Sure. The flow is: start the passkey login, let the client complete the platform challenge, then finish the login with the signed result."]
+            "spokenTexts": ["Sure. The flow is: start the secure login, let the client complete the platform challenge, then finish the login with the signed result."]
           }
         }
       ]
@@ -572,12 +633,12 @@
       "turns": [
         {
           "id": "approve_edit",
-          "user": "Codex wants approval to edit Uni Auth.",
+          "user": "Codex wants approval to edit Sample Auth.",
           "approvalPrompt": {
             "title": "Codex needs approval",
             "providerID": "codex-agent",
             "mode": "act",
-            "workspacePath": "/workspace/uni-auth",
+            "workspacePath": "/workspace/sample-auth",
             "dataScopes": ["prompt", "workspaceFiles"],
             "actionScopes": ["readWorkspace", "runCommands", "editWorkspace"],
             "decision": "approveForSession"
@@ -606,10 +667,10 @@
       "tags": ["agent", "codex", "memory", "project", "issue-29"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
@@ -621,29 +682,29 @@
       "turns": [
         {
           "id": "ask_first",
-          "user": "Ask Codex in Uni Auth what passkey files matter.",
+          "user": "Ask Codex in Sample Auth what login files matter.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"identify passkey files\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"Codex found the passkey files.\",\"detailsMarkdown\":\"## Files\\n- routes/passkeys.ts\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"identify login files\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found the login files.\",\"detailsMarkdown\":\"## Files\\n- routes/login.ts\"}"
           }
         },
         {
           "id": "follow_up_edit",
           "user": "Great, tell Codex to add a short comment there.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"prompt\":\"add a short comment in the passkey files\",\"mode\":\"act\"}",
-            "responseText": "{\"bubbleText\":\"Codex updated the passkey file with a short comment.\",\"detailsMarkdown\":\"Changed routes/passkeys.ts.\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"prompt\":\"add a short comment in the login files\",\"mode\":\"act\"}",
+            "responseText": "{\"bubbleText\":\"Codex updated the login file with a short comment.\",\"detailsMarkdown\":\"Changed routes/login.ts.\"}"
           },
           "expectations": {
             "agentRequests": [
               {
                 "providerID": "codex-agent",
-                "workspacePath": "/workspace/uni-auth",
+                "workspacePath": "/workspace/sample-auth",
                 "promptContains": "short comment",
                 "mode": "act"
               }
             ],
-            "memoryContains": ["Context packet:", "routes/passkeys.ts"],
+            "memoryContains": ["Context packet:", "routes/login.ts"],
             "forbiddenMessageTextContains": ["Which project should Codex use?"]
           }
         }
@@ -656,19 +717,19 @@
       "tags": ["agent", "project", "clarification"],
       "projects": [
         {
-          "id": "ter-admin",
-          "displayName": "TER Admin",
-          "localPath": "/workspace/ter-admin"
+          "id": "nova-admin",
+          "displayName": "Nova Admin",
+          "localPath": "/workspace/nova-admin"
         },
         {
-          "id": "ter-backend",
-          "displayName": "TER Backend",
-          "localPath": "/workspace/ter-backend"
+          "id": "nova-backend",
+          "displayName": "Nova Backend",
+          "localPath": "/workspace/nova-backend"
         },
         {
-          "id": "ter-frontend",
-          "displayName": "TER Frontend",
-          "localPath": "/workspace/ter-frontend"
+          "id": "nova-frontend",
+          "displayName": "Nova Frontend",
+          "localPath": "/workspace/nova-frontend"
         }
       ],
       "agent": {
@@ -679,16 +740,16 @@
       },
       "turns": [
         {
-          "id": "ask_ter",
-          "user": "Ask Codex in the ter project what auth endpoints exist.",
+          "id": "ask_nova",
+          "user": "Ask Codex in the nova project what auth endpoints exist.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"what auth endpoints exist?\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"nova\",\"prompt\":\"what auth endpoints exist?\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "Which project do you mean: TER Admin, TER Backend, TER Frontend?"
+                "text": "Which project do you mean: Nova Admin, Nova Backend, Nova Frontend?"
               }
             ],
             "agentRequestCount": 0,
@@ -704,19 +765,19 @@
       "tags": ["agent", "project", "clarification", "interrupt-resume", "issue-28"],
       "projects": [
         {
-          "id": "ter-admin",
-          "displayName": "TER Admin",
-          "localPath": "/workspace/ter-admin"
+          "id": "nova-admin",
+          "displayName": "Nova Admin",
+          "localPath": "/workspace/nova-admin"
         },
         {
-          "id": "ter-backend",
-          "displayName": "TER Backend",
-          "localPath": "/workspace/ter-backend"
+          "id": "nova-backend",
+          "displayName": "Nova Backend",
+          "localPath": "/workspace/nova-backend"
         },
         {
-          "id": "ter-mailer",
-          "displayName": "TER Mailer",
-          "localPath": "/workspace/ter-mailer"
+          "id": "nova-mailer",
+          "displayName": "Nova Mailer",
+          "localPath": "/workspace/nova-mailer"
         }
       ],
       "agent": {
@@ -727,16 +788,16 @@
       },
       "turns": [
         {
-          "id": "ask_ter_readme_lines",
-          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "id": "ask_nova_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the nova project?",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"nova\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+                "text": "Which project do you mean: Nova Admin, Nova Backend, Nova Mailer?"
               }
             ],
             "agentRequestCount": 0
@@ -744,7 +805,7 @@
         },
         {
           "id": "choose_backend",
-          "user": "ter backend",
+          "user": "nova backend",
           "brain": {
             "responseText": "{\"bubbleText\":\"Codex found the README line count.\",\"detailsMarkdown\":\"README.md has 42 lines.\"}"
           },
@@ -752,7 +813,7 @@
             "messages": [
               {
                 "role": "assistant",
-                "text": "I'll ask Codex to inspect TER Backend and summarize what it finds."
+                "text": "I'll ask Codex to inspect Nova Backend and summarize what it finds."
               },
               {
                 "role": "assistant",
@@ -764,7 +825,7 @@
             "agentRequests": [
               {
                 "providerID": "codex-agent",
-                "workspacePath": "/workspace/ter-backend",
+                "workspacePath": "/workspace/nova-backend",
                 "promptContains": "README.md file",
                 "mode": "ask"
               }
@@ -791,19 +852,19 @@
       "tags": ["agent", "project", "clarification", "interrupt-resume", "issue-28"],
       "projects": [
         {
-          "id": "ter-admin",
-          "displayName": "TER Admin",
-          "localPath": "/workspace/ter-admin"
+          "id": "nova-admin",
+          "displayName": "Nova Admin",
+          "localPath": "/workspace/nova-admin"
         },
         {
-          "id": "ter-backend",
-          "displayName": "TER Backend",
-          "localPath": "/workspace/ter-backend"
+          "id": "nova-backend",
+          "displayName": "Nova Backend",
+          "localPath": "/workspace/nova-backend"
         },
         {
-          "id": "ter-mailer",
-          "displayName": "TER Mailer",
-          "localPath": "/workspace/ter-mailer"
+          "id": "nova-mailer",
+          "displayName": "Nova Mailer",
+          "localPath": "/workspace/nova-mailer"
         }
       ],
       "agent": {
@@ -814,29 +875,29 @@
       },
       "turns": [
         {
-          "id": "ask_ter_readme_lines",
-          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "id": "ask_nova_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the nova project?",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"nova\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+                "text": "Which project do you mean: Nova Admin, Nova Backend, Nova Mailer?"
               }
             ],
             "agentRequestCount": 0
           }
         },
         {
-          "id": "answer_ter",
-          "user": "ter",
+          "id": "answer_nova",
+          "user": "nova",
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+                "text": "Which project do you mean: Nova Admin, Nova Backend, Nova Mailer?"
               }
             ],
             "forbiddenMessageTextContains": ["Codex finished.", "README.md has 42 lines."],
@@ -852,19 +913,19 @@
       "tags": ["agent", "project", "clarification", "routing", "issue-28"],
       "projects": [
         {
-          "id": "ter-admin",
-          "displayName": "TER Admin",
-          "localPath": "/workspace/ter-admin"
+          "id": "nova-admin",
+          "displayName": "Nova Admin",
+          "localPath": "/workspace/nova-admin"
         },
         {
-          "id": "ter-backend",
-          "displayName": "TER Backend",
-          "localPath": "/workspace/ter-backend"
+          "id": "nova-backend",
+          "displayName": "Nova Backend",
+          "localPath": "/workspace/nova-backend"
         },
         {
-          "id": "ter-mailer",
-          "displayName": "TER Mailer",
-          "localPath": "/workspace/ter-mailer"
+          "id": "nova-mailer",
+          "displayName": "Nova Mailer",
+          "localPath": "/workspace/nova-mailer"
         }
       ],
       "agent": {
@@ -875,16 +936,16 @@
       },
       "turns": [
         {
-          "id": "ask_ter_readme_lines",
-          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "id": "ask_nova_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the nova project?",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"nova\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+                "text": "Which project do you mean: Nova Admin, Nova Backend, Nova Mailer?"
               }
             ],
             "agentRequestCount": 0
@@ -913,19 +974,19 @@
     {
       "id": "explicit_ambiguous_project_overrides_prior_context",
       "title": "Explicit ambiguous project beats prior context",
-      "description": "If recent context is Uni Auth but the user says the ter project, Roca should not reuse Uni Auth; it should discover TER matches and ask which one.",
+      "description": "If recent context is Sample Auth but the user says the nova project, Roca should not reuse Sample Auth; it should discover Nova matches and ask which one.",
       "tags": ["agent", "project", "memory", "clarification", "issue-29"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "UNI Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         },
         {
-          "id": "cached-ter-backend",
-          "displayName": "TER Backend",
-          "localPath": "/workspace/ter-backend"
+          "id": "cached-nova-backend",
+          "displayName": "Nova Backend",
+          "localPath": "/workspace/nova-backend"
         }
       ],
       "agent": {
@@ -936,27 +997,27 @@
         "discoveryCandidates": [
           {
             "project": {
-              "id": "ter-admin",
-              "displayName": "TER Admin",
-              "localPath": "/workspace/ter-admin"
+              "id": "nova-admin",
+              "displayName": "Nova Admin",
+              "localPath": "/workspace/nova-admin"
             },
             "confidence": "high",
             "score": 100
           },
           {
             "project": {
-              "id": "ter-backend",
-              "displayName": "TER Backend",
-              "localPath": "/workspace/ter-backend"
+              "id": "nova-backend",
+              "displayName": "Nova Backend",
+              "localPath": "/workspace/nova-backend"
             },
             "confidence": "high",
             "score": 136
           },
           {
             "project": {
-              "id": "ter-mailer",
-              "displayName": "TER Mailer",
-              "localPath": "/workspace/ter-mailer"
+              "id": "nova-mailer",
+              "displayName": "Nova Mailer",
+              "localPath": "/workspace/nova-mailer"
             },
             "confidence": "high",
             "score": 90
@@ -965,16 +1026,16 @@
       },
       "turns": [
         {
-          "id": "ask_uni_auth_first",
-          "user": "Ask Codex in Uni Auth what passkey files matter.",
+          "id": "ask_sample_auth_first",
+          "user": "Ask Codex in Sample Auth what login files matter.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey files matter?\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"Codex found the passkey files.\",\"detailsMarkdown\":\"## Files\\n- routes/passkeys.ts\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"what login files matter?\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Codex found the login files.\",\"detailsMarkdown\":\"## Files\\n- routes/login.ts\"}"
           }
         },
         {
-          "id": "ask_ter_readme_lines",
-          "user": "Can you ask codex to tell me how many lines the README.md file is in the ter project?",
+          "id": "ask_nova_readme_lines",
+          "user": "Can you ask codex to tell me how many lines the README.md file is in the nova project?",
           "brain": {
             "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"prompt\":\"tell me how many lines the README.md file is\",\"mode\":\"ask\"}"
           },
@@ -982,7 +1043,7 @@
             "messages": [
               {
                 "role": "assistant",
-                "text": "Which project do you mean: TER Admin, TER Backend, TER Mailer?"
+                "text": "Which project do you mean: Nova Admin, Nova Backend, Nova Mailer?"
               }
             ],
             "agentRequestCount": 0
@@ -993,13 +1054,13 @@
     {
       "id": "other_project_correction_excludes_prior_match",
       "title": "Other project correction excludes rejected match",
-      "description": "If the user corrects Roca with 'not ter-backend, the other ter project', Roca should search for TER and ask between the remaining TER matches.",
+      "description": "If the user corrects Roca with 'not nova-backend, the other nova project', Roca should search for Nova and ask between the remaining Nova matches.",
       "tags": ["agent", "project", "clarification", "correction", "issue-29"],
       "projects": [
         {
-          "id": "cached-ter-backend",
-          "displayName": "TER Backend",
-          "localPath": "/workspace/ter-backend"
+          "id": "cached-nova-backend",
+          "displayName": "Nova Backend",
+          "localPath": "/workspace/nova-backend"
         }
       ],
       "agent": {
@@ -1010,27 +1071,27 @@
         "discoveryCandidates": [
           {
             "project": {
-              "id": "ter-admin",
-              "displayName": "TER Admin",
-              "localPath": "/workspace/ter-admin"
+              "id": "nova-admin",
+              "displayName": "Nova Admin",
+              "localPath": "/workspace/nova-admin"
             },
             "confidence": "high",
             "score": 100
           },
           {
             "project": {
-              "id": "ter-backend",
-              "displayName": "TER Backend",
-              "localPath": "/workspace/ter-backend"
+              "id": "nova-backend",
+              "displayName": "Nova Backend",
+              "localPath": "/workspace/nova-backend"
             },
             "confidence": "high",
             "score": 136
           },
           {
             "project": {
-              "id": "ter-mailer",
-              "displayName": "TER Mailer",
-              "localPath": "/workspace/ter-mailer"
+              "id": "nova-mailer",
+              "displayName": "Nova Mailer",
+              "localPath": "/workspace/nova-mailer"
             },
             "confidence": "high",
             "score": 90
@@ -1039,16 +1100,16 @@
       },
       "turns": [
         {
-          "id": "reject_backend_ask_other_ter",
-          "user": "No I mean not ter-backend project, ask codex how many lines are in the readme for the other ter project",
+          "id": "reject_backend_ask_other_nova",
+          "user": "No I mean not nova-backend project, ask codex how many lines are in the readme for the other nova project",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"ter project\",\"prompt\":\"how many lines are in the README.md\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"nova project\",\"prompt\":\"how many lines are in the README.md\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "Which project do you mean: TER Admin, TER Mailer?"
+                "text": "Which project do you mean: Nova Admin, Nova Mailer?"
               }
             ],
             "agentRequestCount": 0
@@ -1071,10 +1132,10 @@
       "turns": [
         {
           "id": "ask_missing_project",
-          "user": "Can you ask uni-auth in Codex what endpoints there are for passkeys?",
+          "user": "Can you ask sample-auth in Codex what endpoints there are for logins?",
           "outputMode": "speakAll",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"what login endpoints exist?\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
@@ -1103,7 +1164,7 @@
           "user": "Why couldn't you find the folder from Codex?",
           "brain": {
             "directiveJSON": "{\"type\":\"respond\"}",
-            "responseText": "{\"bubbleText\":\"Codex project lookup timed out, so I could not confirm the Uni Auth folder from Codex. You can give me the local folder or ask me to try again.\",\"detailsMarkdown\":null}"
+            "responseText": "{\"bubbleText\":\"Codex project lookup timed out, so I could not confirm the Sample Auth folder from Codex. You can give me the local folder or ask me to try again.\",\"detailsMarkdown\":null}"
           },
           "expectations": {
             "messages": [
@@ -1115,7 +1176,7 @@
             "memoryContains": [
               "Assistant context bridge:",
               "Recent assistant task ledger:",
-              "failed task; provider=Codex; mode=ask; projectQuery=uni-auth",
+              "failed task; provider=Codex; mode=ask; projectQuery=sample-auth",
               "couldn't read Codex's project list in time"
             ],
             "agentRequestCount": 0
@@ -1131,7 +1192,7 @@
       "turns": [
         {
           "id": "bad_router_json",
-          "user": "Ask Codex about Uni Auth passkeys.",
+          "user": "Ask Codex about Sample Auth logins.",
           "brain": {
             "directiveJSON": "not json"
           },
@@ -1180,10 +1241,10 @@
       "tags": ["agent", "codex", "formatting", "issue-29"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
@@ -1195,9 +1256,9 @@
       "turns": [
         {
           "id": "edit_readme",
-          "user": "Ask Codex to update the Uni Auth infrastructure README.",
+          "user": "Ask Codex to update the Sample Auth infrastructure README.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"update the infrastructure README\",\"mode\":\"act\"}",
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"update the infrastructure README\",\"mode\":\"act\"}",
             "responseText": "{\"bubbleText\":\"Codex updated the README.\",\"detailsMarkdown\":null}"
           },
           "expectations": {
@@ -1211,7 +1272,7 @@
             "agentRequests": [
               {
                 "providerID": "codex-agent",
-                "workspacePath": "/workspace/uni-auth",
+                "workspacePath": "/workspace/sample-auth",
                 "promptContains": "infrastructure README",
                 "mode": "act"
               }
@@ -1254,10 +1315,10 @@
       "tags": ["agent", "claude", "setup"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
@@ -1269,9 +1330,9 @@
       "turns": [
         {
           "id": "ask_claude_missing_runtime",
-          "user": "Ask Claude in Uni Auth what passkey endpoints exist.",
+          "user": "Ask Claude in Sample Auth what login endpoints exist.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"uni-auth\",\"prompt\":\"what passkey endpoints exist?\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"sample-auth\",\"prompt\":\"what login endpoints exist?\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
@@ -1330,31 +1391,31 @@
       "tags": ["agent", "claude", "handoff"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
         "providerID": "claude-code",
         "displayName": "Claude",
         "kind": "noisy",
-        "responseText": "Passkeys use begin and finish endpoints."
+        "responseText": "Logins use begin and finish endpoints."
       },
       "turns": [
         {
           "id": "ask_claude",
-          "user": "Ask Claude in Uni Auth how passkey login works.",
+          "user": "Ask Claude in Sample Auth how secure login works.",
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"uni-auth\",\"prompt\":\"explain how passkey login works\",\"mode\":\"ask\"}",
-            "responseText": "{\"bubbleText\":\"Claude found the passkey login flow.\",\"detailsMarkdown\":\"Begin login, complete the platform challenge, then finish login.\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"sample-auth\",\"prompt\":\"explain how secure login works\",\"mode\":\"ask\"}",
+            "responseText": "{\"bubbleText\":\"Claude found the secure login flow.\",\"detailsMarkdown\":\"Begin login, complete the platform challenge, then finish login.\"}"
           },
           "expectations": {
             "messages": [
               {
                 "role": "assistant",
-                "text": "I'll ask Claude to inspect Uni Auth and summarize what it finds."
+                "text": "I'll ask Claude to inspect Sample Auth and summarize what it finds."
               },
               {
                 "role": "action",
@@ -1363,16 +1424,16 @@
               },
               {
                 "role": "assistant",
-                "text": "Claude found the passkey login flow.",
+                "text": "Claude found the secure login flow.",
                 "detailsContains": "platform challenge"
               }
             ],
-            "forbiddenMessageTextContains": ["listing project files", "grep found passkey routes"],
+            "forbiddenMessageTextContains": ["listing project files", "grep found login routes"],
             "agentRequests": [
               {
                 "providerID": "claude-code",
-                "workspacePath": "/workspace/uni-auth",
-                "promptContains": "passkey login",
+                "workspacePath": "/workspace/sample-auth",
+                "promptContains": "secure login",
                 "mode": "ask"
               }
             ]
@@ -1443,12 +1504,12 @@
       "turns": [
         {
           "id": "approve_claude_edit",
-          "user": "Claude wants approval to edit Uni Auth.",
+          "user": "Claude wants approval to edit Sample Auth.",
           "approvalPrompt": {
             "title": "Claude File Change",
             "providerID": "claude-code",
             "mode": "act",
-            "workspacePath": "/workspace/uni-auth",
+            "workspacePath": "/workspace/sample-auth",
             "dataScopes": ["prompt", "workspaceFiles"],
             "actionScopes": ["readWorkspace", "runCommands", "editWorkspace"],
             "decision": "approve"
@@ -1477,10 +1538,10 @@
       "tags": ["agent", "claude", "cancel", "retry"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
@@ -1492,10 +1553,10 @@
       "turns": [
         {
           "id": "start_and_cancel",
-          "user": "Ask Claude in Uni Auth to inspect passkey endpoints.",
+          "user": "Ask Claude in Sample Auth to inspect login endpoints.",
           "cancelAfterAgentStarts": true,
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"uni-auth\",\"prompt\":\"inspect passkey endpoints\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"claude-code\",\"providerName\":\"Claude\",\"projectName\":\"sample-auth\",\"prompt\":\"inspect login endpoints\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [
@@ -1535,10 +1596,10 @@
       "tags": ["agent", "cancel", "retry"],
       "projects": [
         {
-          "id": "uni-auth",
-          "displayName": "Uni Auth",
-          "aliases": ["uni-auth"],
-          "localPath": "/workspace/uni-auth"
+          "id": "sample-auth",
+          "displayName": "Sample Auth",
+          "aliases": ["sample-auth"],
+          "localPath": "/workspace/sample-auth"
         }
       ],
       "agent": {
@@ -1550,10 +1611,10 @@
       "turns": [
         {
           "id": "start_and_cancel",
-          "user": "Ask Codex in Uni Auth to inspect passkey endpoints.",
+          "user": "Ask Codex in Sample Auth to inspect login endpoints.",
           "cancelAfterAgentStarts": true,
           "brain": {
-            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"uni-auth\",\"prompt\":\"inspect passkey endpoints\",\"mode\":\"ask\"}"
+            "directiveJSON": "{\"type\":\"runAgent\",\"providerID\":\"codex-agent\",\"providerName\":\"Codex\",\"projectName\":\"sample-auth\",\"prompt\":\"inspect login endpoints\",\"mode\":\"ask\"}"
           },
           "expectations": {
             "messages": [

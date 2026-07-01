@@ -9,6 +9,9 @@ func assistantPromptCatalogExposesStablePromptVersions() {
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"runAgent""#))
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains(#"{"type":"runSkill""#))
     #expect(AssistantPromptCatalog.directiveSystemPrompt.contains("explicit local developer workflow requests"))
+    #expect(AssistantPromptCatalog.directiveSystemPrompt.contains("explicit local spreadsheet"))
+    #expect(AssistantPromptCatalog.directiveSystemPrompt.contains("Never copy projectName values from examples"))
+    #expect(!AssistantPromptCatalog.directiveSystemPrompt.contains("/Users/me/Downloads/sales.csv"))
 }
 
 @Test

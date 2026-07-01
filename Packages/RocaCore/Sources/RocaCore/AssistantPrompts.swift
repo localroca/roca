@@ -42,8 +42,9 @@ public enum AssistantPromptCatalog {
     {"type":"quitApplication","appName":"Safari"}
     {"type":"insertText","text":"exact text to insert"}
     {"type":"readSelection"}
-    {"type":"runAgent","providerID":"codex-agent","projectName":"uni-auth","prompt":"what to ask the agent","mode":"ask"}
-    {"type":"runSkill","skillID":"codebase","projectName":"uni-auth","prompt":"what Roca should inspect locally","mode":"ask"}
+    {"type":"runAgent","providerID":"codex-agent","projectName":"sample-auth","prompt":"what to ask the agent","mode":"ask"}
+    {"type":"runSkill","skillID":"codebase","projectName":"sample-auth","prompt":"what Roca should inspect locally","mode":"ask"}
+    {"type":"runSkill","skillID":"spreadsheet","projectName":"spreadsheet file or folder from the user's words","prompt":"what Roca should calculate locally","mode":"ask"}
     {"type":"unsupported","message":"brief reason"}
 
     Rules:
@@ -55,14 +56,17 @@ public enum AssistantPromptCatalog {
     - If the user asks how to install, configure, authenticate, or set up Codex, Claude, Cursor, or an agent provider, use respond, not runAgent.
     - Use runAgent when the user explicitly asks Roca to use an external coding/work agent such as Codex, Claude, or Cursor.
     - Use runSkill with skillID codebase for explicit local developer workflow requests over a named project, repo, codebase, folder, or path when the user did not name an external provider. Developer workflows include architecture summaries, important entry points, "where does this behavior live" questions, implementation-plan drafting, tradeoff analysis, and diff review.
+    - Use runSkill with skillID spreadsheet for explicit local spreadsheet, workbook, CSV, XLSX, table, sheet, or column-analysis requests when the user gives a spreadsheet file, folder, path, or named local spreadsheet context. Spreadsheet workflows include summarizing sheets, profiling columns, explaining formulas, summing or averaging columns, counting rows, filtering rows, grouping, and top/bottom row questions.
     - Only route developer workflows when the user gives explicit project, repo, codebase, folder, or path context. If the context is missing or only says "current", "same", or "that", use respond and ask which project or folder to use.
+    - Only route spreadsheet workflows when the user gives explicit spreadsheet, workbook, file, folder, or path context. If the context is missing or only says "current", "same", or "that", use respond and ask which spreadsheet file or folder to use.
     - For runAgent providerID, use codex-agent, claude-code, or cursor-agent.
-    - For runSkill skillID, use codebase or spreadsheet. Spreadsheet support is not ready yet; use unsupported if the user asks for spreadsheet work.
+    - For runSkill skillID, use codebase or spreadsheet.
+    - Never copy projectName values from examples. projectName must come from the user's current message or recent clarified context.
     - For runAgent projectName, preserve the project phrase the user gave. Omit it only when no project is mentioned.
     - For runSkill projectName, preserve the project phrase the user gave. Omit it only when no project is mentioned.
     - If the user says "in the X project", "for the X repo", or similar, include projectName X even if recent context mentioned a different project.
     - For runAgent prompt, include the task for the agent without "ask Codex/Claude/Cursor to".
-    - For runSkill prompt, include the local task without saying "use the Codebase Skill".
+    - For runSkill prompt, include the local task without saying "use the Codebase Skill" or "use the Spreadsheet Skill".
     - For runAgent mode, use ask for questions or inspection, plan for plans/tradeoffs, and act for requested code changes.
     - For runSkill mode, use ask for questions or inspection, plan for plans/tradeoffs, and never use act.
     - If recent context identifies an agent project and the user asks that agent for a follow-up change there, reuse the same provider and project.

@@ -236,18 +236,18 @@
       "tags": ["single", "command", "agent", "project"],
       "turns": [
         {
-          "id": "ask_uni_auth",
-          "user": "Can we ask the uni-auth project in Codex what endpoints are supported for passkeys right now?",
+          "id": "ask_sample_auth",
+          "user": "Can we ask the sample-auth project in Codex what endpoints are supported for logins right now?",
           "inputMode": "typed",
           "expectations": {
             "directives": ["runAgent"],
             "agentProviderID": "codex-agent",
-            "projectName": "uni-auth",
+            "projectName": "sample-auth",
             "agentMode": "ask",
             "notes": "Eval must dry-run as wouldRunAgent and must not start Codex."
           },
           "rubric": {
-            "intent": "Routes to runAgent with Codex, the uni-auth project, and ask mode.",
+            "intent": "Routes to runAgent with Codex, the sample-auth project, and ask mode.",
             "responseQuality": "No assistant prose is needed.",
             "rocaVoice": "N/A unless the model misroutes.",
             "formatDiscipline": "Router JSON only.",
@@ -266,13 +266,13 @@
       "tags": ["single", "command", "agent", "project", "clarification"],
       "turns": [
         {
-          "id": "ask_ter",
-          "user": "Ask Codex in the ter project what auth endpoints exist.",
+          "id": "ask_nova",
+          "user": "Ask Codex in the nova project what auth endpoints exist.",
           "inputMode": "typed",
           "expectations": {
             "directives": ["runAgent"],
             "agentProviderID": "codex-agent",
-            "projectName": "ter",
+            "projectName": "nova",
             "agentMode": "ask",
             "notes": "Eval must dry-run as wouldRunAgent. Project ambiguity is resolved by Roca after routing."
           },
@@ -281,9 +281,9 @@
             "responseQuality": "No assistant prose is needed from the router.",
             "rocaVoice": "N/A unless the model misroutes.",
             "formatDiscipline": "Router JSON only.",
-            "safetyHonesty": "Does not invent a specific ter project.",
-            "must": ["Use runAgent", "Keep projectName as ter"],
-            "mustNot": ["Guess ter-backend", "Use respond"]
+            "safetyHonesty": "Does not invent a specific nova project.",
+            "must": ["Use runAgent", "Keep projectName as nova"],
+            "mustNot": ["Guess nova-backend", "Use respond"]
           }
         }
       ]

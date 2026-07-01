@@ -8,12 +8,12 @@ func assistantTaskLedgerStoresEventsAndStatus() async {
         AssistantTaskRecord(
             id: "task-1",
             turnID: "turn-1",
-            userRequest: "ask Codex about passkeys",
+            userRequest: "ask Codex about logins",
             capabilityID: "codex-agent",
             providerID: "codex-agent",
             providerName: "Codex",
             mode: .ask,
-            projectQuery: "uni-auth"
+            projectQuery: "sample-auth"
         )
     )
 

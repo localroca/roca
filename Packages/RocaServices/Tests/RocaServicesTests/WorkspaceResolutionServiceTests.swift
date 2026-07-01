@@ -18,12 +18,12 @@ func workspaceResolutionResolvesLocalCatalogBeforeProviderDiscovery() async thro
     )
     let service = WorkspaceResolutionService(
         catalog: StaticProjectIdentityCatalog([
-            ProjectIdentity(id: "uni-auth", displayName: "UNI Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth")
+            ProjectIdentity(id: "sample-auth", displayName: "Sample Auth", aliases: ["sample-auth"], localPath: "/workspace/sample-auth")
         ])
     )
 
     let outcome = try await service.resolve(
-        query: "uni-auth",
+        query: "sample-auth",
         prompt: "what endpoints exist?",
         discoverer: agent
     )
@@ -32,7 +32,7 @@ func workspaceResolutionResolvesLocalCatalogBeforeProviderDiscovery() async thro
         Issue.record("Expected local resolution, got \(outcome).")
         return
     }
-    #expect(resolved.project.id == "uni-auth")
+    #expect(resolved.project.id == "sample-auth")
     #expect(resolved.source == .localCatalog)
     #expect(await agent.discoveryQueries.isEmpty)
 }
@@ -41,32 +41,32 @@ func workspaceResolutionResolvesLocalCatalogBeforeProviderDiscovery() async thro
 func workspaceResolutionReportsLocalAmbiguity() async throws {
     let service = WorkspaceResolutionService(
         catalog: StaticProjectIdentityCatalog([
-            ProjectIdentity(id: "ter-admin", displayName: "TER Admin", localPath: "/workspace/ter-admin"),
-            ProjectIdentity(id: "ter-backend", displayName: "TER Backend", localPath: "/workspace/ter-backend")
+            ProjectIdentity(id: "nova-admin", displayName: "Nova Admin", localPath: "/workspace/nova-admin"),
+            ProjectIdentity(id: "nova-backend", displayName: "Nova Backend", localPath: "/workspace/nova-backend")
         ])
     )
 
-    let outcome = try await service.resolve(query: "ter", prompt: "read README", discoverer: nil)
+    let outcome = try await service.resolve(query: "nova", prompt: "read README", discoverer: nil)
 
     guard case .ambiguous(_, let candidates, let source) = outcome else {
         Issue.record("Expected ambiguity, got \(outcome).")
         return
     }
     #expect(source == .localCatalog)
-    #expect(candidates.map(\.id) == ["ter-admin", "ter-backend"])
+    #expect(candidates.map(\.id) == ["nova-admin", "nova-backend"])
 }
 
 @Test
 func workspaceResolutionDiscoversLocalFilesystemAmbiguityFromFolderHint() async throws {
     let work = try temporaryWorkspaceWorkFolder()
-    try createProjectFolder(named: "ter-admin", under: work)
-    try createProjectFolder(named: "ter-backend", under: work)
-    try createProjectFolder(named: "ter-web", under: work)
-    try createProjectFolder(named: "uni-auth", under: work)
+    try createProjectFolder(named: "nova-admin", under: work)
+    try createProjectFolder(named: "nova-backend", under: work)
+    try createProjectFolder(named: "nova-web", under: work)
+    try createProjectFolder(named: "sample-auth", under: work)
     let service = WorkspaceResolutionService()
 
     let outcome = try await service.resolveFromLocalFolders(
-        query: "ter",
+        query: "nova",
         hint: "It should be somewhere in \(work.path)"
     )
 
@@ -75,18 +75,18 @@ func workspaceResolutionDiscoversLocalFilesystemAmbiguityFromFolderHint() async 
         return
     }
     #expect(source == .localFilesystem)
-    #expect(candidates.map(\.displayName) == ["TER Admin", "TER Backend", "TER Web"])
-    #expect(candidates.map(\.localFolderName) == ["ter-admin", "ter-backend", "ter-web"])
+    #expect(candidates.map(\.displayName) == ["Nova Admin", "Nova Backend", "Nova Web"])
+    #expect(candidates.map(\.localFolderName) == ["nova-admin", "nova-backend", "nova-web"])
 }
 
 @Test
 func workspaceResolutionDiscoversDirectProjectFolderHint() async throws {
     let work = try temporaryWorkspaceWorkFolder()
-    let projectURL = try createProjectFolder(named: "ter-backend", under: work)
+    let projectURL = try createProjectFolder(named: "nova-backend", under: work)
     let service = WorkspaceResolutionService()
 
     let outcome = try await service.resolveFromLocalFolders(
-        query: "ter backend",
+        query: "nova backend",
         hint: "It's at \(projectURL.path)"
     )
 
@@ -95,13 +95,80 @@ func workspaceResolutionDiscoversDirectProjectFolderHint() async throws {
         return
     }
     #expect(resolved.source == .localFilesystem)
-    #expect(resolved.project.displayName == "TER Backend")
+    #expect(resolved.project.displayName == "Nova Backend")
     #expect(resolved.project.localPath == projectURL.path)
 }
 
 @Test
+func workspaceResolutionResolvesExplicitLocalFilePath() async throws {
+    let work = try temporaryWorkspaceWorkFolder()
+    let fileURL = work.appendingPathComponent("sales.csv")
+    try "Name,Amount\nA,10\n".write(to: fileURL, atomically: true, encoding: .utf8)
+    let service = WorkspaceResolutionService()
+
+    let outcome = try await service.resolveLocal(
+        query: fileURL.path,
+        shouldVerifyBroadMatchWithProvider: false
+    )
+
+    guard case .resolved(let project) = outcome else {
+        Issue.record("Expected explicit local file path resolution, got \(outcome).")
+        return
+    }
+    #expect(project.displayName == "sales.csv")
+    #expect(project.localPath == fileURL.path)
+    #expect(project.aliases.contains(fileURL.path))
+}
+
+@Test
+func workspaceResolutionResolvesNamedDownloadsSpreadsheetFile() async throws {
+    let home = try temporaryWorkspaceWorkFolder()
+    let downloads = home.appendingPathComponent("Downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    let fileURL = downloads.appendingPathComponent("sample-orders.csv")
+    try "Name,Amount\nA,10\n".write(to: fileURL, atomically: true, encoding: .utf8)
+    let service = WorkspaceResolutionService(userHomeDirectory: home)
+
+    let outcome = try await service.resolveLocal(
+        query: "sample-orders.csv file in the Downloads folder",
+        shouldVerifyBroadMatchWithProvider: false
+    )
+
+    guard case .resolved(let project) = outcome else {
+        Issue.record("Expected named Downloads file resolution, got \(outcome).")
+        return
+    }
+    #expect(project.displayName == "sample-orders.csv")
+    #expect(project.localPath == fileURL.path)
+    #expect(project.aliases.contains("sample-orders.csv"))
+}
+
+@Test
+func workspaceResolutionUsesRequestContextForDownloadsSpreadsheetFile() async throws {
+    let home = try temporaryWorkspaceWorkFolder()
+    let downloads = home.appendingPathComponent("Downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    let fileURL = downloads.appendingPathComponent("sample-orders.csv")
+    try "Name,Amount\nA,10\n".write(to: fileURL, atomically: true, encoding: .utf8)
+    let service = WorkspaceResolutionService(userHomeDirectory: home)
+
+    let outcome = try await service.resolveLocal(
+        query: "sample-orders.csv",
+        context: "Can you summarize the sample-orders.csv file in the Downloads folder?",
+        shouldVerifyBroadMatchWithProvider: false
+    )
+
+    guard case .resolved(let project) = outcome else {
+        Issue.record("Expected named Downloads file resolution from context, got \(outcome).")
+        return
+    }
+    #expect(project.displayName == "sample-orders.csv")
+    #expect(project.localPath == fileURL.path)
+}
+
+@Test
 func workspaceResolutionDiscoversProviderProjectAndWritesCache() async throws {
-    let discovered = ProjectIdentity(id: "uni-auth", displayName: "UNI Auth", aliases: ["uni-auth"], localPath: "/workspace/uni-auth")
+    let discovered = ProjectIdentity(id: "sample-auth", displayName: "Sample Auth", aliases: ["sample-auth"], localPath: "/workspace/sample-auth")
     let agent = RecordingSessionAgentProvider(
         responseText: "unused",
         discoveryCandidates: [
@@ -111,16 +178,16 @@ func workspaceResolutionDiscoversProviderProjectAndWritesCache() async throws {
     let writer = RecordingProjectWriter()
     let service = WorkspaceResolutionService(writer: writer)
 
-    let outcome = try await service.resolve(query: "uni-auth", prompt: "what endpoints exist?", discoverer: agent)
+    let outcome = try await service.resolve(query: "sample-auth", prompt: "what endpoints exist?", discoverer: agent)
 
     guard case .resolved(let resolved) = outcome else {
         Issue.record("Expected provider resolution, got \(outcome).")
         return
     }
-    #expect(resolved.project.id == "uni-auth")
+    #expect(resolved.project.id == "sample-auth")
     #expect(resolved.source == .providerDiscovery)
     #expect(resolved.candidateCount == 1)
-    #expect(await agent.discoveryQueries == [ProjectDiscoveryQuery(projectName: "uni-auth", prompt: "what endpoints exist?")])
+    #expect(await agent.discoveryQueries == [ProjectDiscoveryQuery(projectName: "sample-auth", prompt: "what endpoints exist?")])
     #expect(await writer.upsertedProjects == [discovered])
 }
 
@@ -130,12 +197,12 @@ func workspaceResolutionPreservesBroadProviderAmbiguity() async throws {
         responseText: "unused",
         discoveryCandidates: [
             ProjectDiscoveryCandidate(
-                project: ProjectIdentity(id: "ter-backend", displayName: "TER Backend", localPath: "/workspace/ter-backend"),
+                project: ProjectIdentity(id: "nova-backend", displayName: "Nova Backend", localPath: "/workspace/nova-backend"),
                 confidence: .high,
                 score: 140
             ),
             ProjectDiscoveryCandidate(
-                project: ProjectIdentity(id: "ter-admin", displayName: "TER Admin", localPath: "/workspace/ter-admin"),
+                project: ProjectIdentity(id: "nova-admin", displayName: "Nova Admin", localPath: "/workspace/nova-admin"),
                 confidence: .high,
                 score: 100
             )
@@ -143,14 +210,14 @@ func workspaceResolutionPreservesBroadProviderAmbiguity() async throws {
     )
     let service = WorkspaceResolutionService()
 
-    let outcome = try await service.resolve(query: "ter", prompt: "read README", discoverer: agent)
+    let outcome = try await service.resolve(query: "nova", prompt: "read README", discoverer: agent)
 
     guard case .ambiguous(_, let candidates, let source) = outcome else {
         Issue.record("Expected provider ambiguity, got \(outcome).")
         return
     }
     #expect(source == .providerDiscovery)
-    #expect(candidates.map(\.id) == ["ter-admin", "ter-backend"])
+    #expect(candidates.map(\.id) == ["nova-admin", "nova-backend"])
 }
 
 @Test
@@ -159,12 +226,12 @@ func workspaceResolutionExcludesNegatedProjectsFromProviderDiscovery() async thr
         responseText: "unused",
         discoveryCandidates: [
             ProjectDiscoveryCandidate(
-                project: ProjectIdentity(id: "ter-backend", displayName: "TER Backend", localPath: "/workspace/ter-backend"),
+                project: ProjectIdentity(id: "nova-backend", displayName: "Nova Backend", localPath: "/workspace/nova-backend"),
                 confidence: .high,
                 score: 140
             ),
             ProjectDiscoveryCandidate(
-                project: ProjectIdentity(id: "ter-admin", displayName: "TER Admin", localPath: "/workspace/ter-admin"),
+                project: ProjectIdentity(id: "nova-admin", displayName: "Nova Admin", localPath: "/workspace/nova-admin"),
                 confidence: .high,
                 score: 100
             )
@@ -173,17 +240,17 @@ func workspaceResolutionExcludesNegatedProjectsFromProviderDiscovery() async thr
     let service = WorkspaceResolutionService()
 
     let outcome = try await service.resolve(
-        query: "ter",
+        query: "nova",
         prompt: "read README",
         discoverer: agent,
-        excluding: ["ter-backend"]
+        excluding: ["nova-backend"]
     )
 
     guard case .resolved(let resolved) = outcome else {
         Issue.record("Expected provider resolution after exclusion, got \(outcome).")
         return
     }
-    #expect(resolved.project.id == "ter-admin")
+    #expect(resolved.project.id == "nova-admin")
     #expect(resolved.source == .providerDiscovery)
 }
 
@@ -198,7 +265,7 @@ func workspaceResolutionPropagatesProviderDiscoveryFailure() async throws {
     let service = WorkspaceResolutionService()
 
     await #expect(throws: DiscoveryFailure.self) {
-        _ = try await service.resolve(query: "uni-auth", prompt: "what endpoints exist?", discoverer: agent)
+        _ = try await service.resolve(query: "sample-auth", prompt: "what endpoints exist?", discoverer: agent)
     }
 }
 

@@ -39,13 +39,16 @@ public enum WorkspaceLocalResolutionOutcome: Equatable, Sendable {
 public struct WorkspaceResolutionService: Sendable {
     private let catalog: (any ProjectIdentityCatalog)?
     private let writer: (any ProjectIdentityWriting)?
+    private let userHomeDirectory: URL
 
     public init(
         catalog: (any ProjectIdentityCatalog)? = nil,
-        writer: (any ProjectIdentityWriting)? = nil
+        writer: (any ProjectIdentityWriting)? = nil,
+        userHomeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         self.catalog = catalog
         self.writer = writer
+        self.userHomeDirectory = userHomeDirectory
     }
 
     public func resolve(
@@ -86,11 +89,23 @@ public struct WorkspaceResolutionService: Sendable {
 
     public func resolveLocal(
         query projectName: String,
+        context: String? = nil,
         shouldVerifyBroadMatchWithProvider: Bool,
         excluding excludedProjectNames: [String] = []
     ) async throws -> WorkspaceLocalResolutionOutcome {
         let allProjects = try await catalog?.projects() ?? []
         let projects = allProjects.filter { !Self.project($0, matchesAny: excludedProjectNames) }
+        if let directPathProject = Self.projectForExistingLocalPath(projectName)
+            ?? Self.projectForExistingKnownFolderFile(projectName, userHomeDirectory: userHomeDirectory)
+            ?? Self.projectForExistingKnownFolderFile(
+                [projectName, context].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " "),
+                userHomeDirectory: userHomeDirectory
+            ),
+           !Self.project(directPathProject, matchesAny: excludedProjectNames) {
+            return .resolved(directPathProject)
+        }
         switch ProjectIdentityResolver(projects: projects).resolve(projectName) {
         case .resolved(let project):
             if shouldVerifyBroadMatchWithProvider,
@@ -262,5 +277,79 @@ public struct WorkspaceResolutionService: Sendable {
                     || normalizedProjectName.split(separator: " ").contains { $0 == normalizedName }
             }
         }
+    }
+
+    private static func projectForExistingLocalPath(_ rawPath: String) -> ProjectIdentity? {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") || trimmed.hasPrefix("~") else {
+            return nil
+        }
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded).standardizedFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        return projectForExistingURL(url, aliases: [trimmed, url.path])
+    }
+
+    private static func projectForExistingKnownFolderFile(
+        _ rawQuery: String,
+        userHomeDirectory: URL
+    ) -> ProjectIdentity? {
+        let normalizedQuery = ProjectIdentityResolver.normalizedKey(rawQuery)
+        let queryTokens = Set(normalizedQuery.split(separator: " ").map(String.init))
+        let candidateFolders: [(aliases: Set<String>, url: URL)] = [
+            (["download", "downloads"], userHomeDirectory.appendingPathComponent("Downloads")),
+            (["desktop"], userHomeDirectory.appendingPathComponent("Desktop")),
+            (["document", "documents"], userHomeDirectory.appendingPathComponent("Documents"))
+        ]
+        let mentionedFolders = candidateFolders.filter { folder in
+            folder.aliases.contains { queryTokens.contains($0) }
+        }
+        guard !mentionedFolders.isEmpty else {
+            return nil
+        }
+        for fileName in localSpreadsheetFileNames(in: rawQuery) {
+            for folder in mentionedFolders {
+                let url = folder.url.appendingPathComponent(fileName).standardizedFileURL
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    continue
+                }
+                return projectForExistingURL(url, aliases: [rawQuery, fileName, url.path])
+            }
+        }
+        return nil
+    }
+
+    private static func localSpreadsheetFileNames(in rawQuery: String) -> [String] {
+        let supportedExtensions: Set<String> = ["csv", "tsv", "xlsx"]
+        let punctuation = CharacterSet(charactersIn: "\"'`.,;:()[]{}<>")
+        var seen = Set<String>()
+        return rawQuery
+            .components(separatedBy: .whitespacesAndNewlines)
+            .compactMap { rawToken -> String? in
+                let token = rawToken
+                    .trimmingCharacters(in: punctuation)
+                    .replacingOccurrences(of: "\\", with: "/")
+                guard !token.isEmpty else {
+                    return nil
+                }
+                let fileName = URL(fileURLWithPath: token).lastPathComponent
+                let fileExtension = URL(fileURLWithPath: fileName).pathExtension.lowercased()
+                guard supportedExtensions.contains(fileExtension), seen.insert(fileName).inserted else {
+                    return nil
+                }
+                return fileName
+            }
+    }
+
+    private static func projectForExistingURL(_ url: URL, aliases: [String]) -> ProjectIdentity {
+        let displayName = url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent
+        return ProjectIdentity(
+            id: ProjectID(rawValue: "local-path-\(ProjectIdentityResolver.normalizedKey(url.path).replacingOccurrences(of: " ", with: "-"))"),
+            displayName: displayName,
+            aliases: aliases,
+            localPath: url.path
+        )
     }
 }

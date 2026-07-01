@@ -17,7 +17,7 @@ public final class KokoroTTSProvider: TTSProvider, @unchecked Sendable {
             supportsStreaming: false,
             supportedFormats: [.wav24Mono],
             locality: .local,
-            recommendedChunkCharacterLimit: 420
+            recommendedChunkCharacterLimit: 260
         )
     }
 

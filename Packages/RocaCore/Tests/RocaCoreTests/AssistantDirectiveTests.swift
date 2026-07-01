@@ -26,15 +26,15 @@ func assistantDirectiveEnvelopeValidatesSupportedActions() throws {
         try AssistantDirectiveEnvelope(
             type: .runAgent,
             providerID: "codex-agent",
-            projectName: "uni-auth",
-            prompt: "what passkey endpoints exist?",
+            projectName: "sample-auth",
+            prompt: "what login endpoints exist?",
             mode: .ask
         ).directive()
             == .runAgent(
                 AgentDirectiveRequest(
                     providerID: ProviderID(rawValue: "codex-agent"),
-                    projectName: "uni-auth",
-                    prompt: "what passkey endpoints exist?",
+                    projectName: "sample-auth",
+                    prompt: "what login endpoints exist?",
                     mode: .ask
                 )
             )

@@ -21,6 +21,13 @@ private enum BrainFailurePhase {
 public actor DefaultAssistantSessionOrchestrator {
     public typealias StopSpeechHandler = @Sendable () async -> Void
 
+    private static let assistantResponseTimeoutSeconds = 300
+
+    private struct ContextualizedSkillDirective: Sendable {
+        var directive: SkillDirectiveRequest
+        var resolvedProjectOverride: ProjectIdentity?
+    }
+
     private let resolver: any ProviderResolving
     private let audioInput: any AudioInputSession
     private let inserter: any FocusedTextInserting
@@ -139,11 +146,12 @@ public actor DefaultAssistantSessionOrchestrator {
         contextProvider: any AssistantContextProviding = DefaultAssistantContextProvider(),
         projectCatalog: (any ProjectIdentityCatalog)? = nil,
         projectWriter: (any ProjectIdentityWriting)? = nil,
-        localSkillWorkers: [any LocalSkillWorking] = [CodebaseSkillWorker()],
+        localSkillWorkers: [any LocalSkillWorking] = [CodebaseSkillWorker(), SpreadsheetSkillWorker()],
         taskLedger: any AssistantTaskLedger = InMemoryAssistantTaskLedger(),
         readSelectionCommand: ReadSelectionCommand? = nil,
         providerSetupInstaller: any ProviderSetupInstalling = DefaultProviderSetupInstaller(),
         companionState: CompanionStateCenter? = nil,
+        userHomeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         stopSpeech: @escaping StopSpeechHandler
     ) {
         self.resolver = resolver
@@ -154,7 +162,11 @@ public actor DefaultAssistantSessionOrchestrator {
         self.applicationCommands = applicationCommands
         self.contextProvider = contextProvider
         let resolvedProjectWriter = projectWriter ?? (projectCatalog as? any ProjectIdentityWriting)
-        self.workspaceResolver = WorkspaceResolutionService(catalog: projectCatalog, writer: resolvedProjectWriter)
+        self.workspaceResolver = WorkspaceResolutionService(
+            catalog: projectCatalog,
+            writer: resolvedProjectWriter,
+            userHomeDirectory: userHomeDirectory
+        )
         self.localSkillWorkers = Dictionary(uniqueKeysWithValues: localSkillWorkers.map { ($0.skillID, $0) })
         self.taskLedger = taskLedger
         self.readSelectionCommand = readSelectionCommand
@@ -1351,6 +1363,26 @@ public actor DefaultAssistantSessionOrchestrator {
         try checkTurnStillActive(request.turnID)
         switch directive {
         case .respond:
+            if let response = priorResultReadAloudResponse(for: input) {
+                let now = Date()
+                timing.responseBrainStartedAt = now
+                timing.responseBrainFinishedAt = now
+                let assistantMessageID = appendAssistantMessage(
+                    response.bubbleText,
+                    status: .completed,
+                    request: request,
+                    directiveType: directive.metricType
+                )
+                completeMessage(
+                    assistantMessageID,
+                    text: response.bubbleText,
+                    detailsMarkdown: response.detailsMarkdown,
+                    status: .completed
+                )
+                remember(userText: input, assistantText: response.conversationText)
+                try await speak(response.bubbleText, request: request, timing: &timing, force: true)
+                return
+            }
             timing.responseBrainStartedAt = Date()
             let assistantMessageID = appendAssistantMessage(
                 "",
@@ -1438,13 +1470,15 @@ public actor DefaultAssistantSessionOrchestrator {
             let contextualized = contextualizedAgentDirective(agentRequest, userInput: input)
             if contextualized.resolvedProviderID == nil,
                let skillRequest = Self.skillDirective(fromProviderlessAgentDirective: contextualized, userInput: input) {
+                let contextualizedSkill = contextualizedSkillDirective(skillRequest, userInput: input)
                 try await handleSkillDirective(
-                    contextualizedSkillDirective(skillRequest, userInput: input),
+                    contextualizedSkill.directive,
                     input: input,
                     request: request,
                     context: context,
                     brainProvider: provider,
-                    timing: &timing
+                    timing: &timing,
+                    resolvedProjectOverride: contextualizedSkill.resolvedProjectOverride
                 )
             } else {
                 try await handleAgentDirective(
@@ -1457,13 +1491,15 @@ public actor DefaultAssistantSessionOrchestrator {
                 )
             }
         case .runSkill(let skillRequest):
+            let contextualizedSkill = contextualizedSkillDirective(skillRequest, userInput: input)
             try await handleSkillDirective(
-                contextualizedSkillDirective(skillRequest, userInput: input),
+                contextualizedSkill.directive,
                 input: input,
                 request: request,
                 context: context,
                 brainProvider: provider,
-                timing: &timing
+                timing: &timing,
+                resolvedProjectOverride: contextualizedSkill.resolvedProjectOverride
             )
         case .unsupported(let message):
             let id = appendAssistantMessage(message, status: .completed, request: request, directiveType: directive.metricType)
@@ -1559,8 +1595,9 @@ public actor DefaultAssistantSessionOrchestrator {
         completeMessage(introID, text: intro, status: .completed)
         try await speak(intro, request: request, timing: &timing, finishWhenDone: false)
 
-        setState(.acting("Scanning \(project.displayName)"))
-        let actionID = appendActionMessage("Scanning \(project.displayName) locally...", status: .streaming, request: request, directiveType: .runSkill)
+        let actionVerb = skillID.rawValue == "spreadsheet" ? "Analyzing" : "Scanning"
+        setState(.acting("\(actionVerb) \(project.displayName)"))
+        let actionID = appendActionMessage("\(actionVerb) \(project.displayName) locally...", status: .streaming, request: request, directiveType: .runSkill)
         timing.actionStartedAt = Date()
         let runID = SkillRunID.make()
         let workflowKind = Self.developerWorkflowKind(for: input, directive: directive)
@@ -1614,7 +1651,8 @@ public actor DefaultAssistantSessionOrchestrator {
             try Task.checkCancellation()
             try checkTurnStillActive(request.turnID)
             timing.actionFinishedAt = Date()
-            completeMessage(actionID, text: "Local scan complete.", status: .completed)
+            let actionCompletion = skillID.rawValue == "spreadsheet" ? "\(worker.displayName) finished." : "Local scan complete."
+            completeMessage(actionID, text: actionCompletion, status: .completed)
             setState(.acting("Summarizing findings"))
             await recordTaskEvent(
                 taskID,
@@ -1659,17 +1697,43 @@ public actor DefaultAssistantSessionOrchestrator {
                 summary: "Formatting \(worker.displayName)'s result."
             )
             timing.responseBrainStartedAt = Date()
-            let formatting = try await completeSkillResultResponse(
-                result,
-                input: input,
+            var formattingFallbackReason: String?
+            let formatting: (response: AssistantResponseContent, evidenceSummary: AssistantEvidenceSummary)
+            do {
+                formatting = try await completeSkillResultResponse(
+                    result,
+                    input: input,
+                    skillName: worker.displayName,
+                    project: project,
+                    request: request,
+                    context: context,
+                    provider: brainProvider,
+                    messageID: assistantMessageID
+                )
+            } catch {
+                timing.responseBrainFinishedAt = Date()
+                if Self.isCancellation(error) {
+                    throw error
+                }
+                guard Self.shouldFallbackToLocalSkillEvidence(error) else {
+                    throw error
+                }
+                formattingFallbackReason = Self.diagnosticErrorType(error)
+                formatting = (
+                    response: Self.fallbackSkillResponse(
+                        skillName: worker.displayName,
+                        project: project,
+                        result: result,
+                        error: error
+                    ),
+                    evidenceSummary: result.evidenceSummary
+                )
+            }
+            let response = Self.normalizedSkillResultResponse(
+                formatting.response,
                 skillName: worker.displayName,
-                project: project,
-                request: request,
-                context: context,
-                provider: brainProvider,
-                messageID: assistantMessageID
+                userInput: input
             )
-            let response = formatting.response
             timing.responseBrainFinishedAt = Date()
             completeMessage(
                 assistantMessageID,
@@ -1683,7 +1747,8 @@ public actor DefaultAssistantSessionOrchestrator {
                 status: .formattingResult,
                 turnID: request.turnID,
                 phase: "skillResultFormatting",
-                summary: response.bubbleText
+                summary: response.bubbleText,
+                metadata: formattingFallbackReason.map { ["formattingFallback": $0] } ?? [:]
             )
             let contextPacket = AssistantContextPacket(
                 currentTask: AssistantAgentTaskContext(
@@ -1706,7 +1771,13 @@ public actor DefaultAssistantSessionOrchestrator {
             )
             lastContextPacket = contextPacket
             rememberAgentResult(userText: input, contextPacket: contextPacket)
-            try await speak(response.bubbleText, request: request, timing: &timing)
+            try await speakSkillResult(
+                response.bubbleText,
+                taskID: taskID,
+                skillID: skillID,
+                request: request,
+                timing: &timing
+            )
             await recordTaskEvent(
                 taskID,
                 kind: .completed,
@@ -1729,7 +1800,7 @@ public actor DefaultAssistantSessionOrchestrator {
                     extra: [
                         "skillID": skillID.rawValue,
                         "toolCount": result.metadata["toolCount"] ?? "0"
-                    ]
+                    ].merging(formattingFallbackReason.map { ["formattingFallback": $0] } ?? [:]) { current, _ in current }
                 )
             )
         } catch {
@@ -2420,6 +2491,7 @@ public actor DefaultAssistantSessionOrchestrator {
         let excludedProjectNames = Self.excludedProjectNames(from: userInput)
         let localResolution = try await workspaceResolver.resolveLocal(
             query: projectName,
+            context: userInput,
             shouldVerifyBroadMatchWithProvider: false,
             excluding: excludedProjectNames
         )
@@ -2475,9 +2547,13 @@ public actor DefaultAssistantSessionOrchestrator {
         case .needsProviderDiscovery(let broadLocalMatch):
             let message: String
             if let broadLocalMatch {
-                message = "I only know \(broadLocalMatch.displayName) for \(projectName). Please name the project more exactly before I inspect it locally."
+                message = Self.localSkillBroadMatchMessage(
+                    skillID: skillID,
+                    query: projectName,
+                    broadLocalMatch: broadLocalMatch
+                )
             } else {
-                message = "I don't know the \(projectName) project folder yet. Please give me the local folder before I inspect it."
+                message = Self.localSkillMissingTargetMessage(skillID: skillID, query: projectName)
             }
             await recordTaskEvent(
                 taskID,
@@ -2797,22 +2873,31 @@ public actor DefaultAssistantSessionOrchestrator {
     private func contextualizedSkillDirective(
         _ directive: SkillDirectiveRequest,
         userInput: String
-    ) -> SkillDirectiveRequest {
+    ) -> ContextualizedSkillDirective {
         var contextualized = directive
         if let explicitProjectName = Self.explicitProjectName(from: userInput) {
             contextualized.projectName = explicitProjectName
-            return Self.developerWorkflowSkillDirective(contextualized, userInput: userInput)
+            return ContextualizedSkillDirective(
+                directive: Self.developerWorkflowSkillDirective(contextualized, userInput: userInput),
+                resolvedProjectOverride: nil
+            )
         }
 
-        if contextualized.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-           let priorResult = contextAssembler.priorAgentResult(from: lastContextPacket),
+        if let priorResult = contextAssembler.priorAgentResult(from: lastContextPacket),
            priorResult.providerID.rawValue == "local-skill",
            priorResult.providerName == directive.skillDisplayName,
            let project = priorResult.project,
-           Self.shouldReusePriorSkillContext(for: userInput, directive: directive) {
+           Self.shouldReusePriorSkillTarget(for: userInput, directive: directive, priorProject: project) {
             contextualized.projectName = project.displayName
+            return ContextualizedSkillDirective(
+                directive: Self.developerWorkflowSkillDirective(contextualized, userInput: userInput),
+                resolvedProjectOverride: project
+            )
         }
-        return Self.developerWorkflowSkillDirective(contextualized, userInput: userInput)
+        return ContextualizedSkillDirective(
+            directive: Self.developerWorkflowSkillDirective(contextualized, userInput: userInput),
+            resolvedProjectOverride: nil
+        )
     }
 
     private func recoveredLocalSkillFollowUpDirective(
@@ -2821,7 +2906,7 @@ public actor DefaultAssistantSessionOrchestrator {
     ) -> AssistantDirective {
         guard let currentTask = contextAssembler.currentTask(from: lastContextPacket),
               currentTask.providerID.rawValue == "local-skill",
-              SkillDirectiveRequest.skillID(for: currentTask.providerName)?.rawValue == "codebase"
+              let currentSkillID = SkillDirectiveRequest.skillID(for: currentTask.providerName)
         else {
             return directive
         }
@@ -2831,7 +2916,7 @@ public actor DefaultAssistantSessionOrchestrator {
         if canRecover, let explicitProjectName = Self.explicitProjectName(from: input) {
             return .runSkill(
                 SkillDirectiveRequest(
-                    skillID: SkillID(rawValue: "codebase"),
+                    skillID: currentSkillID,
                     projectName: explicitProjectName,
                     prompt: currentTask.prompt,
                     mode: currentTask.mode == .act ? .ask : currentTask.mode
@@ -2868,15 +2953,15 @@ public actor DefaultAssistantSessionOrchestrator {
            canRecover {
             return .runSkill(
                 SkillDirectiveRequest(
-                    skillID: admission.requiredSkillID ?? SkillID(rawValue: "codebase"),
-                    projectName: project.displayName,
+                    skillID: admission.requiredSkillID ?? currentSkillID,
+                    projectName: project.localPath,
                     prompt: Self.localSkillFollowUpPrompt(priorPrompt: currentTask.prompt, input: input),
                     mode: currentTask.mode == .act ? .ask : currentTask.mode
                 )
             )
         }
 
-        guard Self.isLocalCodebaseFollowUp(input),
+        guard Self.isLocalSkillFollowUp(input, skillID: currentSkillID),
               let project = currentTask.project,
               canRecover
         else {
@@ -2885,8 +2970,8 @@ public actor DefaultAssistantSessionOrchestrator {
 
         return .runSkill(
             SkillDirectiveRequest(
-                skillID: SkillID(rawValue: "codebase"),
-                projectName: project.displayName,
+                skillID: currentSkillID,
+                projectName: project.localPath,
                 prompt: Self.localSkillFollowUpPrompt(priorPrompt: currentTask.prompt, input: input),
                 mode: currentTask.mode == .act ? .ask : currentTask.mode
             )
@@ -3096,7 +3181,10 @@ public actor DefaultAssistantSessionOrchestrator {
                 activeAppName: context.activeAppName,
                 memoryIDs: []
             ),
-            metadata: ["responseFormat": "json"]
+            metadata: [
+                "responseFormat": "json",
+                BrainRequestMetadataKeys.requestTimeoutSeconds: String(Self.assistantResponseTimeoutSeconds)
+            ]
         )
         let events = try await provider.complete(brainRequest)
         var accumulated = ""
@@ -3247,16 +3335,32 @@ public actor DefaultAssistantSessionOrchestrator {
         setState(.speaking)
         let baseSpeechRequest = speechRequest(text: trimmed, utteranceID: UtteranceID.make(), request: request)
         let chunkPlanStartedAt = Date()
-        let chunkLimit = try await speechOrchestrator.recommendedChunkCharacterLimit(for: baseSpeechRequest)
-        let chunks = chunkLimit.map { AssistantSpeechChunker.chunks(from: trimmed, maxCharacters: max(1, $0)) } ?? [trimmed]
+        let chunkLimit = max(1, try await speechOrchestrator.recommendedChunkCharacterLimit(for: baseSpeechRequest) ?? AssistantSpeechChunker.maxCharacters)
+        let chunks = AssistantSpeechChunker.chunks(from: trimmed, maxCharacters: chunkLimit)
         timing.recordTTSPreparation(from: chunkPlanStartedAt, to: Date())
 
         for chunk in chunks {
-            try Task.checkCancellation()
-            try checkTurnStillActive(request.turnID)
+            try await speakChunk(chunk, request: request, timing: &timing, maxCharacters: chunkLimit)
+        }
+        if finishWhenDone {
+            await finishTurn(request)
+        }
+    }
 
-            let utteranceID = UtteranceID.make()
-            let preparationStartedAt = Date()
+    private static let minimumAdaptiveSpeechChunkCharacters = 40
+
+    private func speakChunk(
+        _ chunk: String,
+        request: AssistantSessionTurnRequest,
+        timing: inout AssistantTurnTimingBuilder,
+        maxCharacters: Int
+    ) async throws {
+        try Task.checkCancellation()
+        try checkTurnStillActive(request.turnID)
+
+        let utteranceID = UtteranceID.make()
+        let preparationStartedAt = Date()
+        do {
             try await speechOrchestrator.speak(
                 speechRequest(text: chunk, utteranceID: utteranceID, request: request)
             )
@@ -3270,8 +3374,58 @@ public actor DefaultAssistantSessionOrchestrator {
             }
             timing.recordTTSPlayback(from: preparationFinishedAt, to: Date())
             try Task.checkCancellation()
+        } catch {
+            guard Self.isRecoverableSpeechLengthError(error),
+                  chunk.count > Self.minimumAdaptiveSpeechChunkCharacters else {
+                throw error
+            }
+            let nextLimit = min(
+                chunk.count - 1,
+                max(Self.minimumAdaptiveSpeechChunkCharacters, max(1, maxCharacters / 2))
+            )
+            guard nextLimit > 0, nextLimit < chunk.count else {
+                throw error
+            }
+            let smallerChunks = AssistantSpeechChunker.chunks(from: chunk, maxCharacters: nextLimit)
+            guard smallerChunks.count > 1 || (smallerChunks.first?.count ?? chunk.count) < chunk.count else {
+                throw error
+            }
+            for smallerChunk in smallerChunks {
+                try await speakChunk(smallerChunk, request: request, timing: &timing, maxCharacters: nextLimit)
+            }
         }
-        if finishWhenDone {
+    }
+
+    private func speakSkillResult(
+        _ text: String,
+        taskID: AssistantTaskID?,
+        skillID: SkillID,
+        request: AssistantSessionTurnRequest,
+        timing: inout AssistantTurnTimingBuilder
+    ) async throws {
+        do {
+            try await speak(text, request: request, timing: &timing)
+        } catch {
+            if Self.isCancellation(error) || isTurnCancelled(request.turnID) {
+                throw error
+            }
+            let message = "Speech failed: \(error.localizedDescription)"
+            await recordTaskEvent(
+                taskID,
+                kind: .failed,
+                turnID: request.turnID,
+                phase: "speech",
+                summary: message,
+                metadata: ["errorType": Self.diagnosticErrorType(error)]
+            )
+            emitDiagnostic(
+                kind: .skillRunFailed,
+                turnID: request.turnID,
+                phase: "speech",
+                directiveType: .runSkill,
+                outcome: "speechFailed",
+                metadata: diagnosticMetadata(for: request, error: error, extra: ["skillID": skillID.rawValue])
+            )
             await finishTurn(request)
         }
     }
@@ -3371,6 +3525,18 @@ public actor DefaultAssistantSessionOrchestrator {
         let lastPacket = lastContextPacket
         let recentTasks = await taskLedger.tasks()
         return contextAssembler.contextMessages(lastPacket: lastPacket, recentTasks: recentTasks)
+    }
+
+    private func priorResultReadAloudResponse(for input: String) -> AssistantResponseContent? {
+        guard Self.isPluralPriorResultReadAloudRequest(input),
+              let priorResult = contextAssembler.priorAgentResult(from: lastContextPacket)
+        else {
+            return nil
+        }
+        return AssistantResponseContent(
+            bubbleText: Self.spokenPriorResultText(priorResult),
+            detailsMarkdown: nil
+        )
     }
 
     private func rememberAssistantObservation(_ text: String) {
@@ -3943,6 +4109,114 @@ public actor DefaultAssistantSessionOrchestrator {
                 || description.contains("exceeds"))
     }
 
+    private nonisolated static func shouldFallbackToLocalSkillEvidence(_ error: Error) -> Bool {
+        if case RocaError.providerTimedOut = error {
+            return true
+        }
+        return false
+    }
+
+    private nonisolated static func isRecoverableSpeechLengthError(_ error: Error) -> Bool {
+        guard case RocaError.synthesisFailed = error else {
+            return false
+        }
+        let description = error.localizedDescription.lowercased()
+        return description.contains("too long")
+            || description.contains("too many tokens")
+            || description.contains("maximum")
+    }
+
+    private nonisolated static func fallbackSkillResponse(
+        skillName: String,
+        project: ProjectIdentity,
+        result: LocalSkillRunResult,
+        error _: Error
+    ) -> AssistantResponseContent {
+        let summaryLine = fallbackSummaryLine(from: result.evidenceMarkdown)
+        let bubbleText: String
+        if let summaryLine {
+            bubbleText = "I inspected \(project.displayName) locally. \(summaryLine)"
+        } else {
+            bubbleText = "I inspected \(project.displayName) locally and found \(result.evidenceSummary.grade.rawValue) evidence. I put the details below."
+        }
+
+        let budgeted = AssistantContextBudgeter.budgetEvidence(
+            markdown: result.evidenceMarkdown,
+            summary: result.evidenceSummary,
+            budget: .tight
+        )
+        let details = """
+        ## Formatting Timeout
+        The \(skillName) finished, but the local model timed out while polishing the response. Roca is showing the local evidence directly.
+
+        ## Local Evidence
+        \(budgeted.markdown)
+        """
+        return AssistantResponseContent(
+            bubbleText: shortenedBubbleText(bubbleText),
+            detailsMarkdown: details
+        )
+    }
+
+    private nonisolated static func fallbackSummaryLine(from markdown: String) -> String? {
+        var isInUsefulSection = false
+        for rawLine in markdown.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("## ") {
+                isInUsefulSection = isUsefulFallbackSection(line)
+                continue
+            }
+            guard isInUsefulSection, let plainLine = plainFallbackLine(line) else {
+                continue
+            }
+            return shortenedBubbleText(plainLine)
+        }
+        return nil
+    }
+
+    private nonisolated static func isUsefulFallbackSection(_ heading: String) -> Bool {
+        let title = heading
+            .replacingOccurrences(of: "#", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if title == "workbook"
+            || title == "sheet inventory"
+            || title == "column profiles"
+            || title == "evidence contract"
+            || title.hasPrefix("preview") {
+            return false
+        }
+        return true
+    }
+
+    private nonisolated static func plainFallbackLine(_ line: String) -> String? {
+        guard !line.hasPrefix("#"),
+              !line.hasPrefix("|"),
+              !line.hasPrefix("-"),
+              !line.localizedCaseInsensitiveContains("operation:"),
+              !line.localizedCaseInsensitiveContains("value column:"),
+              !line.localizedCaseInsensitiveContains("matching rows:"),
+              !line.localizedCaseInsensitiveContains("numeric rows used:"),
+              !line.localizedCaseInsensitiveContains("filters:")
+        else {
+            return nil
+        }
+        let plain = line
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "**", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return plain.isEmpty ? nil : plain
+    }
+
+    private nonisolated static func shortenedBubbleText(_ text: String, maxLength: Int = 240) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxLength else {
+            return trimmed
+        }
+        return String(trimmed.prefix(maxLength - 1)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
     private nonisolated static func skillResultFormattingFailureMessage(project: ProjectIdentity, error: Error) -> String {
         if let recoveryMessage = brainRecoveryMessage(for: error, phase: .response) {
             return "I inspected \(project.displayName), but \(recoveryMessage)"
@@ -3973,6 +4247,17 @@ public actor DefaultAssistantSessionOrchestrator {
             || normalized.contains("try that again")
             || normalized.contains("run that again")
             || normalized.contains("rerun that")
+    }
+
+    private nonisolated static func isLocalSkillFollowUp(_ input: String, skillID: SkillID) -> Bool {
+        switch skillID.rawValue {
+        case "codebase":
+            return isLocalCodebaseFollowUp(input)
+        case "spreadsheet":
+            return isLocalSpreadsheetFollowUp(input)
+        default:
+            return false
+        }
     }
 
     private nonisolated static func isLocalCodebaseFollowUp(_ input: String) -> Bool {
@@ -4014,6 +4299,53 @@ public actor DefaultAssistantSessionOrchestrator {
             "entry points"
         ]
         return codebaseTerms.contains { normalized.contains($0) }
+    }
+
+    private nonisolated static func isLocalSpreadsheetFollowUp(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        guard !normalized.isEmpty,
+              !normalized.contains("codex"),
+              !normalized.contains("claude"),
+              !normalized.contains("cursor")
+        else {
+            return false
+        }
+
+        let spreadsheetTerms = [
+            "top",
+            "bottom",
+            "highest",
+            "lowest",
+            "largest",
+            "smallest",
+            "most",
+            "least",
+            "sum",
+            "total",
+            "average",
+            "mean",
+            "median",
+            "count",
+            "filter",
+            "where",
+            "group",
+            "breakdown",
+            "sort",
+            "row",
+            "rows",
+            "column",
+            "columns",
+            "transaction",
+            "transactions",
+            "commission",
+            "revenue",
+            "amount",
+            "grand total",
+            "buy",
+            "sell",
+            "status"
+        ]
+        return spreadsheetTerms.contains { normalized.contains($0) }
     }
 
     private nonisolated static func isCancellation(_ error: Error) -> Bool {
@@ -4096,10 +4428,13 @@ public actor DefaultAssistantSessionOrchestrator {
         let asksForSpeech = normalized.contains("out loud")
             || normalized.contains("say it")
             || normalized.contains("say that")
+            || normalized.contains("say them")
             || normalized.contains("read it")
             || normalized.contains("read that")
+            || normalized.contains("read them")
             || normalized.contains("tell it")
             || normalized.contains("tell that")
+            || normalized.contains("tell them")
         let asksForVerbalOnly = normalized.contains("don't print")
             || normalized.contains("dont print")
             || normalized.contains("not just print")
@@ -4138,35 +4473,40 @@ public actor DefaultAssistantSessionOrchestrator {
         ].contains { normalized.contains($0) }
     }
 
-    private nonisolated static func shouldReusePriorSkillContext(
+    private nonisolated static func shouldReusePriorSkillTarget(
         for input: String,
-        directive: SkillDirectiveRequest
+        directive: SkillDirectiveRequest,
+        priorProject: ProjectIdentity
     ) -> Bool {
-        guard directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-              explicitProjectName(from: input) == nil
-        else {
+        guard explicitProjectName(from: input) == nil else {
             return false
         }
         if directive.mode != .ask {
             return true
         }
-        let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return [
-            "there",
-            "same project",
-            "same repo",
-            "same codebase",
-            "that project",
-            "that repo",
-            "that file",
-            "those files",
-            "what about",
-            "its ",
-            "in it",
-            "for it",
-            "follow up",
-            "continue"
-        ].contains { normalized.contains($0) }
+        let target = directive.projectName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let target, !target.isEmpty else {
+            if directive.resolvedSkillID?.rawValue == "spreadsheet",
+               mentionsSpreadsheetFileName(input) {
+                return false
+            }
+            return true
+        }
+        return localTarget(target, matches: priorProject)
+    }
+
+    private nonisolated static func mentionsSpreadsheetFileName(_ input: String) -> Bool {
+        let lowercased = input.lowercased()
+        return [".csv", ".tsv", ".xlsx"].contains { lowercased.contains($0) }
+    }
+
+    private nonisolated static func localTarget(_ rawTarget: String, matches project: ProjectIdentity) -> Bool {
+        let normalizedTarget = ProjectIdentityResolver.normalizedKey(rawTarget)
+        guard !normalizedTarget.isEmpty else {
+            return false
+        }
+        let names = project.searchNames + [project.displayName, project.localFolderName, project.localPath]
+        return names.contains { ProjectIdentityResolver.normalizedKey($0) == normalizedTarget }
     }
 
     private enum DeveloperWorkflowKind: String, Sendable {
@@ -4502,6 +4842,28 @@ public actor DefaultAssistantSessionOrchestrator {
         prompt: String
     ) -> String {
         let text = ProjectIdentityResolver.normalizedKey([userInput, prompt].joined(separator: " "))
+        if skillName == "Spreadsheet Skill" {
+            switch mode {
+            case .ask:
+                if text.contains("average")
+                    || text.contains("mean")
+                    || text.contains("sum")
+                    || text.contains("total")
+                    || text.contains("count")
+                    || text.contains("filter")
+                    || text.contains("where") {
+                    return "I'll analyze \(project.displayName) locally and show the calculation."
+                }
+                if text.contains("formula") {
+                    return "I'll inspect \(project.displayName)'s formulas locally."
+                }
+                return "I'll analyze \(project.displayName) locally."
+            case .plan:
+                return "I'll inspect \(project.displayName) locally and outline the spreadsheet findings."
+            case .act:
+                return "\(skillName) is read-only for now."
+            }
+        }
         switch mode {
         case .ask:
             if text.contains("no i mean")
@@ -4529,11 +4891,420 @@ public actor DefaultAssistantSessionOrchestrator {
         }
     }
 
-    private nonisolated static func speechText(from text: String) -> String {
-        let filtered = text.unicodeScalars.filter { !isSpeechEmojiScalar($0) }
-        return String(String.UnicodeScalarView(filtered))
+    private nonisolated static func localSkillBroadMatchMessage(
+        skillID: SkillID,
+        query: String,
+        broadLocalMatch: ProjectIdentity
+    ) -> String {
+        if skillID.rawValue == "spreadsheet" {
+            return "I found \(broadLocalMatch.displayName), but \(query) is still ambiguous. Please name the spreadsheet file more exactly."
+        }
+        return "I only know \(broadLocalMatch.displayName) for \(query). Please name the project more exactly before I inspect it locally."
+    }
+
+    private nonisolated static func localSkillMissingTargetMessage(skillID: SkillID, query: String) -> String {
+        if skillID.rawValue == "spreadsheet" {
+            return "I couldn't find or access \(query) as a spreadsheet file. Please give me the full file path, or confirm the filename and folder."
+        }
+        return "I don't know the \(query) project folder yet. Please give me the local folder before I inspect it."
+    }
+
+    private nonisolated static func normalizedSkillResultResponse(
+        _ response: AssistantResponseContent,
+        skillName: String,
+        userInput: String
+    ) -> AssistantResponseContent {
+        guard let detailsMarkdown = response.detailsMarkdown?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !detailsMarkdown.isEmpty,
+              !isExplicitReadAloudRequest(userInput)
+        else {
+            return response
+        }
+
+        let bubble = response.bubbleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard shouldUseVisualFirstSkillBubble(bubble, skillName: skillName, userInput: userInput) else {
+            return response
+        }
+
+        return AssistantResponseContent(
+            bubbleText: visualFirstSkillBubble(
+                originalBubble: bubble,
+                detailsMarkdown: detailsMarkdown,
+                skillName: skillName,
+                userInput: userInput
+            ),
+            detailsMarkdown: response.detailsMarkdown
+        )
+    }
+
+    private nonisolated static func shouldUseVisualFirstSkillBubble(
+        _ bubble: String,
+        skillName: String,
+        userInput: String
+    ) -> Bool {
+        if bubble.count > 240 {
+            return true
+        }
+        if containsRankedListMarkers(bubble) || containsLongMachineToken(bubble) {
+            return true
+        }
+        return skillName == "Spreadsheet Skill"
+            && isSpreadsheetRowListingRequest(userInput)
+            && bubble.count > 160
+    }
+
+    private nonisolated static func visualFirstSkillBubble(
+        originalBubble: String,
+        detailsMarkdown: String,
+        skillName: String,
+        userInput: String
+    ) -> String {
+        if skillName == "Spreadsheet Skill" {
+            return spreadsheetVisualFirstBubble(userInput: userInput, detailsMarkdown: detailsMarkdown)
+        }
+        if let preview = speechSafePreview(from: originalBubble, maxLength: 180) {
+            return preview
+        }
+        return "I finished the local inspection and put the details below."
+    }
+
+    private nonisolated static func spreadsheetVisualFirstBubble(userInput: String, detailsMarkdown: String) -> String {
+        let normalized = ProjectIdentityResolver.normalizedKey("\(userInput) \(detailsMarkdown.prefix(500))")
+        if normalized.contains("commission") {
+            if normalized.contains("top") || normalized.contains("highest") || normalized.contains("most") || normalized.contains("largest") {
+                return "I found the top commission transactions and put the table below."
+            }
+            return "I finished the commission analysis and put the details below."
+        }
+        if normalized.contains("top") || normalized.contains("highest") || normalized.contains("most") || normalized.contains("largest") {
+            return "I found the top rows and put the table below."
+        }
+        if normalized.contains("bottom") || normalized.contains("lowest") || normalized.contains("least") || normalized.contains("smallest") {
+            return "I found the bottom rows and put the table below."
+        }
+        if normalized.contains("average") || normalized.contains("mean") || normalized.contains("sum") || normalized.contains("total") || normalized.contains("count") {
+            return "I finished the calculation and put the details below."
+        }
+        return "I summarized the spreadsheet and put the details below."
+    }
+
+    private nonisolated static func isExplicitReadAloudRequest(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        return normalized.contains("out loud")
+            || normalized.contains("read me")
+            || normalized.contains("read it")
+            || normalized.contains("read them")
+            || normalized.contains("say it")
+            || normalized.contains("say that")
+            || normalized.contains("say them")
+            || normalized.contains("speak it")
+            || normalized.contains("tell it to me")
+            || normalized.contains("tell them to me")
+            || normalized.contains("tell me them")
+            || normalized.contains("tell me aloud")
+    }
+
+    private nonisolated static func isPluralPriorResultReadAloudRequest(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        return normalized.contains("read them")
+            || normalized.contains("say them")
+            || normalized.contains("tell them")
+            || normalized.contains("tell me them")
+    }
+
+    private struct MarkdownTableSummary {
+        var headers: [String]
+        var rows: [[String]]
+    }
+
+    private nonisolated static func spokenPriorResultText(_ result: AssistantAgentResultContext) -> String {
+        let details = result.detailsMarkdown?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let details, !details.isEmpty {
+            if let tableSummary = spokenMarkdownTableSummary(details) {
+                return tableSummary
+            }
+            if let listSummary = spokenMarkdownListSummary(details) {
+                return listSummary
+            }
+        }
+
+        let summary = result.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !summary.isEmpty {
+            return summary
+        }
+        return "I do not have enough previous detail to read that back clearly."
+    }
+
+    private nonisolated static func spokenMarkdownTableSummary(_ markdown: String) -> String? {
+        guard let table = firstMarkdownTable(in: markdown), !table.rows.isEmpty else {
+            return nil
+        }
+        let headers = table.headers
+        let rowLimit = min(table.rows.count, 5)
+        let normalizedHeaders = headers.map(ProjectIdentityResolver.normalizedKey)
+        let rankIndex = normalizedHeaders.firstIndex(of: "rank")
+        let valueIndex = preferredValueColumnIndex(headers: headers)
+        let labelIndex = headers.indices.first { index in
+            index != rankIndex && index != valueIndex
+        }
+        let metric = readableMarkdownTableHeader(headers[valueIndex])
+        let segments = table.rows.prefix(rowLimit).compactMap { row -> String? in
+            guard valueIndex < row.count else {
+                return nil
+            }
+            let value = spokenTableValue(row[valueIndex], header: headers[valueIndex])
+            if let labelIndex, labelIndex < row.count {
+                let label = row[labelIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !label.isEmpty {
+                    return "\(label) at \(value)"
+                }
+            }
+            return "\(metric) \(value)"
+        }
+        guard !segments.isEmpty else {
+            return nil
+        }
+
+        let countText = numberWord(rowLimit)
+        let rankingText = markdown.localizedCaseInsensitiveContains("top")
+            ? "top \(countText)"
+            : "first \(countText)"
+        return "Sure. The \(rankingText) by \(metric) are: \(naturalLanguageJoin(segments))."
+    }
+
+    private nonisolated static func firstMarkdownTable(in markdown: String) -> MarkdownTableSummary? {
+        let lines = markdown
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard lines.count >= 2 else {
+            return nil
+        }
+
+        for index in 0..<(lines.count - 1) {
+            guard lines[index].contains("|"),
+                  isMarkdownTableSeparator(lines[index + 1]) else {
+                continue
+            }
+            let headers = markdownTableCells(lines[index])
+            guard headers.count >= 2 else {
+                continue
+            }
+            var rows: [[String]] = []
+            for rowLine in lines.dropFirst(index + 2) {
+                guard rowLine.contains("|"), !isMarkdownTableSeparator(rowLine) else {
+                    break
+                }
+                let row = markdownTableCells(rowLine)
+                if row.count >= 2 {
+                    rows.append(row)
+                }
+            }
+            if !rows.isEmpty {
+                return MarkdownTableSummary(headers: headers, rows: rows)
+            }
+        }
+        return nil
+    }
+
+    private nonisolated static func markdownTableCells(_ line: String) -> [String] {
+        line
+            .trimmingCharacters(in: CharacterSet(charactersIn: "| "))
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    private nonisolated static func isMarkdownTableSeparator(_ line: String) -> Bool {
+        let cells = markdownTableCells(line)
+        guard !cells.isEmpty else {
+            return false
+        }
+        return cells.allSatisfy { cell in
+            !cell.isEmpty && cell.allSatisfy { character in
+                character == "-" || character == ":" || character.isWhitespace
+            }
+        }
+    }
+
+    private nonisolated static func preferredValueColumnIndex(headers: [String]) -> Int {
+        let preferredTokens = ["commission", "amount", "total", "value", "price", "balance", "count", "average"]
+        let normalizedHeaders = headers.map(ProjectIdentityResolver.normalizedKey)
+        if let index = normalizedHeaders.firstIndex(where: { header in
+            preferredTokens.contains { header.contains($0) }
+        }) {
+            return index
+        }
+        return max(0, headers.count - 1)
+    }
+
+    private nonisolated static func readableMarkdownTableHeader(_ header: String) -> String {
+        header
+            .replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated static func spokenTableValue(_ value: String, header: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedHeader = ProjectIdentityResolver.normalizedKey(header)
+        if trimmed.hasPrefix("$") {
+            return trimmed
+        }
+        if normalizedHeader.contains("usd") || normalizedHeader.contains("dollar") {
+            return "\(trimmed) dollars"
+        }
+        return trimmed
+    }
+
+    private nonisolated static func spokenMarkdownListSummary(_ markdown: String) -> String? {
+        let ignoredPrefixes = ["source", "sheet", "rows analyzed", "target column", "sort direction", "filters"]
+        let items = markdown
+            .components(separatedBy: .newlines)
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") else {
+                    return nil
+                }
+                let item = String(trimmed.dropFirst(2))
+                    .replacingOccurrences(of: "**", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let normalized = ProjectIdentityResolver.normalizedKey(item)
+                guard !ignoredPrefixes.contains(where: { normalized.hasPrefix($0) }) else {
+                    return nil
+                }
+                return item.isEmpty ? nil : item
+            }
+            .prefix(6)
+        guard !items.isEmpty else {
+            return nil
+        }
+        return "Sure. Here is what I have: \(naturalLanguageJoin(Array(items)))."
+    }
+
+    private nonisolated static func naturalLanguageJoin(_ items: [String]) -> String {
+        switch items.count {
+        case 0:
+            return ""
+        case 1:
+            return items[0]
+        case 2:
+            return "\(items[0]); and \(items[1])"
+        default:
+            return items.dropLast().joined(separator: "; ") + "; and " + (items.last ?? "")
+        }
+    }
+
+    private nonisolated static func numberWord(_ value: Int) -> String {
+        switch value {
+        case 1: "one"
+        case 2: "two"
+        case 3: "three"
+        case 4: "four"
+        case 5: "five"
+        case 6: "six"
+        case 7: "seven"
+        case 8: "eight"
+        case 9: "nine"
+        case 10: "ten"
+        default: String(value)
+        }
+    }
+
+    private nonisolated static func isSpreadsheetRowListingRequest(_ input: String) -> Bool {
+        let normalized = ProjectIdentityResolver.normalizedKey(input)
+        return normalized.contains("top ")
+            || normalized.contains("bottom ")
+            || normalized.contains("highest")
+            || normalized.contains("lowest")
+            || normalized.contains("largest")
+            || normalized.contains("smallest")
+            || normalized.contains("most ")
+            || normalized.contains("least ")
+    }
+
+    private nonisolated static func containsRankedListMarkers(_ text: String) -> Bool {
+        !regexCaptures(in: text, pattern: #"\b([0-9]{1,2})\)"#).isEmpty
+    }
+
+    private nonisolated static func containsLongMachineToken(_ text: String) -> Bool {
+        text.split { $0.isWhitespace || $0.isPunctuation }.contains { token in
+            token.count >= 18 && token.contains { $0.isNumber }
+        }
+    }
+
+    private nonisolated static func speechSafePreview(from text: String, maxLength: Int) -> String? {
+        let normalized = text
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            return nil
+        }
+        guard normalized.count > maxLength else {
+            return normalized
+        }
+        return shortenedBubbleText(normalized, maxLength: maxLength)
+    }
+
+    private nonisolated static func speechText(from text: String) -> String {
+        let filtered = text.unicodeScalars.filter { !isSpeechEmojiScalar($0) }
+        return expandCurrencyForSpeech(String(String.UnicodeScalarView(filtered)))
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated static func expandCurrencyForSpeech(_ text: String) -> String {
+        let pattern = #"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)([KkMmBb])?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+        var result = text
+        let nsRange = NSRange(result.startIndex..<result.endIndex, in: result)
+        for match in regex.matches(in: result, range: nsRange).reversed() {
+            guard match.numberOfRanges >= 3,
+                  let fullRange = Range(match.range(at: 0), in: result),
+                  let numberRange = Range(match.range(at: 1), in: result)
+            else {
+                continue
+            }
+            let number = String(result[numberRange])
+            let suffix = Range(match.range(at: 2), in: result).map { String(result[$0]).lowercased() }
+            result.replaceSubrange(fullRange, with: currencySpeechText(number: number, suffix: suffix))
+        }
+        return result
+    }
+
+    private nonisolated static func currencySpeechText(number: String, suffix: String?) -> String {
+        let compactNumber = number.replacingOccurrences(of: ",", with: "")
+        if let suffix, !suffix.isEmpty {
+            let unit: String
+            switch suffix {
+            case "k": unit = "thousand dollars"
+            case "m": unit = "million dollars"
+            case "b": unit = "billion dollars"
+            default: unit = "dollars"
+            }
+            return "\(compactNumber) \(unit)"
+        }
+
+        let parts = compactNumber.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else {
+            return "\(number) dollars"
+        }
+        let dollars = parts[0]
+        let cents = String(parts[1].prefix(2))
+        guard cents != "00" else {
+            return "\(numberWithoutTrailingCents(number)) dollars"
+        }
+        if dollars == "0" {
+            return "\(Int(cents) ?? 0) cents"
+        }
+        return "\(dollars) dollars and \(Int(cents) ?? 0) cents"
+    }
+
+    private nonisolated static func numberWithoutTrailingCents(_ number: String) -> String {
+        if number.hasSuffix(".00") {
+            return String(number.dropLast(3))
+        }
+        return number
     }
 
     private nonisolated static func isSpeechEmojiScalar(_ scalar: Unicode.Scalar) -> Bool {
@@ -4588,13 +5359,38 @@ public actor DefaultAssistantSessionOrchestrator {
         localEvidence: String,
         evidenceSummary: AssistantEvidenceSummary
     ) -> String {
-        """
-        The user asked Roca to inspect a local project using \(skillName).
+        let skillGuidance: String
+        if skillName == "Spreadsheet Skill" {
+            skillGuidance = """
+            For Spreadsheet Skill results:
+            - Answer from the calculation, sheet inventory, column profiles, formula inventory, and previews provided.
+            - Keep bubbleText short, conversational, and suitable for speech.
+            - Put calculation details, filters, row counts, sheet names, column names, bounded previews, and caveats in detailsMarkdown.
+            - If the evidence says clarification is needed, ask the user to choose a spreadsheet file and list the choices in detailsMarkdown.
+            - For sums, averages, counts, groups, and top/bottom rows, include the value, target column, filters, matching row count, and numeric row count when provided.
+            - Do not dump raw workbook data beyond the bounded previews already provided.
+            - Do not claim formulas were recalculated; formula evidence is formula text and cached/local cell values only.
+            """
+        } else {
+            skillGuidance = """
+            For Codebase Skill results:
+            - For language inventory requests, include the primary language and notable secondary languages from the repository map and manifests.
+            - Do not say JavaScript, TypeScript, Node, or CDK are absent if the evidence shows matching files or manifests.
+            - Prefer concise path and symbol references over raw file contents.
+            - Treat the local evidence as an evidence packet, not a complete omniscient view of the repo.
+            - Answer only from the repository map, search results, diff, and targeted file snippets provided.
+            - Cite concrete paths when making claims about languages, frameworks, files, entry points, or deployment infrastructure.
+            - Do not claim something is absent unless the evidence contract says the relevant paths or file types were scanned.
+            - If the user's correction narrows the scope, acknowledge the corrected scope and answer that scope directly.
+            """
+        }
+        return """
+        The user asked Roca to inspect local data using \(skillName).
 
         User request:
         \(userInput)
 
-        Project:
+        Local target:
         \(project.displayName) at \(project.localPath)
 
         Evidence summary:
@@ -4604,16 +5400,7 @@ public actor DefaultAssistantSessionOrchestrator {
         \(localEvidence)
 
         Return Roca's final response as JSON using the required bubbleText/detailsMarkdown shape.
-        Keep bubbleText short, conversational, and suitable for speech.
-        Put paths, entry points, diff-review findings, implementation details, and evidence in detailsMarkdown.
-        For language inventory requests, include the primary language and notable secondary languages from the repository map and manifests.
-        Do not say JavaScript, TypeScript, Node, or CDK are absent if the evidence shows matching files or manifests.
-        Prefer concise path and symbol references over raw file contents.
-        Treat the local evidence as an evidence packet, not a complete omniscient view of the repo.
-        Answer only from the repository map, search results, diff, and targeted file snippets provided.
-        Cite concrete paths when making claims about languages, frameworks, files, entry points, or deployment infrastructure.
-        Do not claim something is absent unless the evidence contract says the relevant paths or file types were scanned.
-        If the user's correction narrows the scope, acknowledge the corrected scope and answer that scope directly.
+        \(skillGuidance)
         Do not mention hidden tool names unless useful to the answer.
         Do not claim code was changed.
         """

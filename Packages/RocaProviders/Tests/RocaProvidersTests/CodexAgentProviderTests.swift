@@ -140,7 +140,7 @@ func codexAgentProviderRequiresWorkspaceForActMode() async throws {
 func codexAgentProviderDelegatesProjectDiscovery() async throws {
     let client = RecordingCodexAgentClient()
     let provider = CodexAgentProvider(client: client)
-    let query = ProjectDiscoveryQuery(projectName: "uni-auth", prompt: "what passkey endpoints exist?")
+    let query = ProjectDiscoveryQuery(projectName: "sample-auth", prompt: "what login endpoints exist?")
 
     _ = try await provider.discoverProjects(matching: query)
 
@@ -167,7 +167,7 @@ func codexAppServerProjectDiscoveryTimesOut() async throws {
 
     await #expect(throws: RocaError.providerTimedOut(providerID: BuiltInProviderIDs.codexAgent, modelID: "Codex project discovery")) {
         _ = try await client.discoverProjects(
-            matching: ProjectDiscoveryQuery(projectName: "uni-auth", prompt: "what passkey endpoints exist?"),
+            matching: ProjectDiscoveryQuery(projectName: "sample-auth", prompt: "what login endpoints exist?"),
             providerID: BuiltInProviderIDs.codexAgent
         )
     }
@@ -176,12 +176,12 @@ func codexAppServerProjectDiscoveryTimesOut() async throws {
 @Test
 func codexAppServerProjectDiscoveryCanReturnEarlyForClearHighConfidenceMatch() {
     let candidate = ProjectDiscoveryCandidate(
-        project: ProjectIdentity(displayName: "Uni Auth", localPath: "/tmp/uni-auth"),
+        project: ProjectIdentity(displayName: "Sample Auth", localPath: "/tmp/sample-auth"),
         confidence: .high,
         score: 108
     )
     let runnerUp = ProjectDiscoveryCandidate(
-        project: ProjectIdentity(displayName: "Uni Auth Infra", localPath: "/tmp/uni-auth-infra"),
+        project: ProjectIdentity(displayName: "Sample Auth Infra", localPath: "/tmp/sample-auth-infra"),
         confidence: .medium,
         score: 70
     )
@@ -192,12 +192,12 @@ func codexAppServerProjectDiscoveryCanReturnEarlyForClearHighConfidenceMatch() {
 @Test
 func codexAppServerProjectDiscoveryKeepsSearchingForCloseMatches() {
     let candidate = ProjectDiscoveryCandidate(
-        project: ProjectIdentity(displayName: "TER Backend", localPath: "/tmp/ter-backend"),
+        project: ProjectIdentity(displayName: "Nova Backend", localPath: "/tmp/nova-backend"),
         confidence: .high,
         score: 104
     )
     let runnerUp = ProjectDiscoveryCandidate(
-        project: ProjectIdentity(displayName: "TER Frontend", localPath: "/tmp/ter-frontend"),
+        project: ProjectIdentity(displayName: "Nova Frontend", localPath: "/tmp/nova-frontend"),
         confidence: .high,
         score: 92
     )

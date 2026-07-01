@@ -201,7 +201,7 @@ struct LocalProjectFolderDiscoverer {
     }
 
     private func displayName(for folderName: String) -> String {
-        let acronymTokens = Set(["ai", "api", "aws", "cli", "crr", "dk", "ml", "ui", "uni", "ter"])
+        let acronymTokens = Set(["ai", "api", "aws", "cli", "ml", "ui"])
         return folderName
             .split { !$0.isLetter && !$0.isNumber }
             .map { token -> String in

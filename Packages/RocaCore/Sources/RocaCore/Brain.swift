@@ -88,6 +88,10 @@ public struct BrainRequest: Codable, Sendable {
     }
 }
 
+public enum BrainRequestMetadataKeys {
+    public static let requestTimeoutSeconds = "requestTimeoutSeconds"
+}
+
 public enum BrainEvent: Sendable {
     case started(requestID: BrainRequestID, providerID: ProviderID)
     case textDelta(String)
